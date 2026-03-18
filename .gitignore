@@ -72,6 +72,7 @@ logs/
 ehthumbs.db
 Thumbs.db
 
+
 # Maven wrapper
 .mvn/wrapper/maven-wrapper.jar
 !/mvnw
