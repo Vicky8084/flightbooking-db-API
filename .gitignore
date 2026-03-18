@@ -47,6 +47,10 @@ application-local.properties
 application-dev.properties
 application-prod.properties
 
+# ✅ YEH IMPORTANT LINES - APPLICATION.PROPERTIES KO GIT SE HATAYENGE
+application.properties
+application.yml
+
 # Logs
 logs/
 *.log
@@ -72,12 +76,6 @@ Thumbs.db
 .mvn/wrapper/maven-wrapper.jar
 !/mvnw
 !/mvnw.cmd
-
-# Application specific
-**/application-*.properties
-**/application-*.yml
-!application.properties
-!application.yml
 
 # Secret files
 *.p12
