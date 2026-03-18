@@ -89,4 +89,5 @@ secrets/
 # Test reports
 test-output/
 *.test
-*.results
+*.resultsapplication.properties
+src/main/resources/application.properties
