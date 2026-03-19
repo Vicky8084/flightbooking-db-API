@@ -1,6 +1,6 @@
 package db_api.db_api.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;  // ✅ IMPORT ADD KARO
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -31,9 +31,10 @@ public class Aircraft {
 
     private Integer firstClassSeats;
 
+    // ✅ FIXED: Changed from User to Airline
     @ManyToOne
     @JoinColumn(name = "airline_id", nullable = false)
-    private User airline;
+    private Airline airline;  // Now references Airline, not User
 
     @JsonIgnore
     @OneToMany(mappedBy = "aircraft", cascade = CascadeType.ALL)
@@ -42,6 +43,4 @@ public class Aircraft {
     @JsonIgnore
     @OneToMany(mappedBy = "aircraft", cascade = CascadeType.ALL)
     private List<Seat> seats;
-
-    // Getters and Setters
 }

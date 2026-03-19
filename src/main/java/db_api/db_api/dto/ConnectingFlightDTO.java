@@ -76,7 +76,7 @@ public class ConnectingFlightDTO {
 
     private void extractAirlines() {
         this.airlines = segments.stream()
-                .map(f -> f.getAircraft().getAirline().getFullName())
+                .map(f -> f.getAircraft().getAirline().getName())
                 .collect(java.util.stream.Collectors.toList());
     }
 

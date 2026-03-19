@@ -1,5 +1,6 @@
 package db_api.db_api.controller;
 
+import db_api.db_api.enums.AccountStatus;
 import db_api.db_api.enums.UserRole;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.User;
@@ -32,18 +33,14 @@ public class UserController {
             response.put("userId", createdUser.getId());
             response.put("email", createdUser.getEmail());
             response.put("role", createdUser.getRole());
+            response.put("status", createdUser.getStatus());
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (BookingException e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(error);
-        } catch (Exception e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("message", "Internal server error: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
         }
     }
 
@@ -94,22 +91,71 @@ public class UserController {
         }
     }
 
+    // ✅ NEW: Get users by status
+    @GetMapping("/status/{status}")
+    public ResponseEntity<?> getUsersByStatus(@PathVariable AccountStatus status) {
+        try {
+            List<User> users = userService.getUsersByStatus(status);
+            return ResponseEntity.ok(users);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
+    // ✅ NEW: Get pending airline admins
+    @GetMapping("/pending-airline-admins")
+    public ResponseEntity<?> getPendingAirlineAdmins() {
+        try {
+            List<User> pendingAdmins = userService.getPendingAirlineAdmins();
+            return ResponseEntity.ok(pendingAdmins);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
+    // ✅ NEW: Approve airline admin
+    @PutMapping("/{adminId}/approve")
+    public ResponseEntity<?> approveAirlineAdmin(
+            @PathVariable Long adminId,
+            @RequestParam Long systemAdminId) {
+        try {
+            User approvedAdmin = userService.approveAirlineAdmin(adminId, systemAdminId);
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Airline admin approved successfully",
+                    "userId", approvedAdmin.getId(),
+                    "status", approvedAdmin.getStatus()
+            ));
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
     @PutMapping("/{id}")
     public ResponseEntity<?> updateUser(@PathVariable Long id, @Valid @RequestBody User userDetails) {
         try {
             User updatedUser = userService.updateUser(id, userDetails);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "User updated successfully");
-            response.put("user", updatedUser);
-
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "User updated successfully",
+                    "user", updatedUser
+            ));
         } catch (BookingException e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(error);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
         }
     }
 
@@ -118,16 +164,15 @@ public class UserController {
         try {
             userService.deleteUser(id);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "User deleted successfully");
-
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "User deleted successfully"
+            ));
         } catch (BookingException e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("success", false);
-            error.put("message", e.getMessage());
-            return ResponseEntity.badRequest().body(error);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
         }
     }
 }

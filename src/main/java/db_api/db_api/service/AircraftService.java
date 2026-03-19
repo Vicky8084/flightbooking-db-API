@@ -1,10 +1,11 @@
 package db_api.db_api.service;
 
+import db_api.db_api.enums.AccountStatus;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.Aircraft;
-import db_api.db_api.model.User;
+import db_api.db_api.model.Airline;
 import db_api.db_api.repository.AircraftRepository;
-import db_api.db_api.repository.UserRepository;
+import db_api.db_api.repository.AirlineRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -17,7 +18,7 @@ public class AircraftService {
     private AircraftRepository aircraftRepository;
 
     @Autowired
-    private UserRepository userRepository;
+    private AirlineRepository airlineRepository;  // ✅ Changed from UserRepository
 
     public Aircraft createAircraft(Aircraft aircraft) throws BookingException {
         // Check if registration number already exists
@@ -25,9 +26,14 @@ public class AircraftService {
             throw new BookingException("Registration number already exists: " + aircraft.getRegistrationNumber());
         }
 
-        // Verify airline exists
-        User airline = userRepository.findById(aircraft.getAirline().getId())
+        // ✅ Verify airline exists in Airline table (not User table)
+        Airline airline = airlineRepository.findById(aircraft.getAirline().getId())
                 .orElseThrow(() -> new BookingException("Airline not found with ID: " + aircraft.getAirline().getId()));
+
+        // ✅ Check if airline is ACTIVE
+        if (airline.getStatus() != AccountStatus.ACTIVE) {
+            throw new BookingException("Airline is not active. Status: " + airline.getStatus());
+        }
 
         aircraft.setAirline(airline);
 
@@ -70,6 +76,12 @@ public class AircraftService {
 
     public void deleteAircraft(Long id) throws BookingException {
         Aircraft aircraft = getAircraftById(id);
+
+        // ✅ Check if aircraft has any flights
+        if (aircraft.getFlights() != null && !aircraft.getFlights().isEmpty()) {
+            throw new BookingException("Cannot delete aircraft with existing flights");
+        }
+
         aircraftRepository.delete(aircraft);
     }
 }
