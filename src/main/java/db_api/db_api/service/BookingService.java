@@ -226,27 +226,6 @@ public class BookingService {
                 .orElseThrow(() -> new BookingException("Booking not found with PNR: " + pnr));
     }
 
-    /**
-     * Find all bookings by user ID
-     */
-    public List<Booking> findByUserId(Long userId) throws BookingException {
-        if (userId == null) {
-            throw new BookingException("User ID cannot be null");
-        }
-
-        // Check if user exists
-        if (!userRepository.existsById(userId)) {
-            throw new BookingException("User not found with ID: " + userId);
-        }
-
-        List<Booking> bookings = bookingRepository.findByUserId(userId);
-
-        if (bookings.isEmpty()) {
-            throw new BookingException("No bookings found for user ID: " + userId);
-        }
-
-        return bookings;
-    }
 
     /**
      * Find bookings by user ID and status (optional utility method)
@@ -338,5 +317,23 @@ public class BookingService {
         }
     }
 
+    // Add this method to existing BookingService class
+
+    /**
+     * Find all bookings by user ID
+     */
+    public List<Booking> findByUserId(Long userId) throws BookingException {
+        if (userId == null) {
+            throw new BookingException("User ID cannot be null");
+        }
+
+        // Check if user exists
+        if (!userRepository.existsById(userId)) {
+            throw new BookingException("User not found with ID: " + userId);
+        }
+
+        List<Booking> bookings = bookingRepository.findByUserId(userId);
+        return bookings;
+    }
 
 }

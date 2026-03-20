@@ -1,6 +1,7 @@
 package db_api.db_api.model;
 
-
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import db_api.db_api.enums.ReviewStatus;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -24,14 +25,17 @@ public class Review {
 
     @ManyToOne
     @JoinColumn(name = "airline_id", nullable = false)
-    private User airline;
+    private Airline airline;
 
     private Integer rating; // 1-5
 
     @Column(length = 1000)
     private String comment;
 
-    private Boolean isApproved = false; // Admin approval required
+    private String title;
+
+    @Enumerated(EnumType.STRING)
+    private ReviewStatus status = ReviewStatus.PENDING; // PENDING, APPROVED, REJECTED
 
     private LocalDateTime createdAt;
 

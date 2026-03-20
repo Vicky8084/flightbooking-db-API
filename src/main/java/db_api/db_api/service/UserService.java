@@ -41,8 +41,13 @@ public class UserService {
         return userRepository.findAll();
     }
 
-    public List<User> getUsersByRole(UserRole role) {
-        return userRepository.findByRole(role);
+    public List<User> getUsersByRole(String role) throws BookingException {
+        try {
+            UserRole userRole = UserRole.valueOf(role.toUpperCase());
+            return userRepository.findByRole(userRole);
+        } catch (IllegalArgumentException e) {
+            throw new BookingException("Invalid role: " + role);
+        }
     }
 
     public List<User> getUsersByStatus(AccountStatus status) {
@@ -51,6 +56,16 @@ public class UserService {
 
     public List<User> getPendingAirlineAdmins() {
         return userRepository.findPendingAirlineAdmins();
+    }
+
+    /**
+     * Update user password
+     */
+    @Transactional
+    public User updatePassword(Long userId, String newPassword) throws BookingException {
+        User user = getUserById(userId);
+        user.setPassword(newPassword);
+        return userRepository.save(user);
     }
 
     public User updateUser(Long id, User userDetails) throws BookingException {

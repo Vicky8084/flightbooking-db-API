@@ -22,7 +22,9 @@ public class User {
     private String email;
 
     @Column(nullable = false)
-    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    // ✅ REMOVED @JsonProperty(access = WRITE_ONLY) so password can be read
+    // ✅ Added @JsonProperty for both read and write
+    @JsonProperty(access = JsonProperty.Access.READ_WRITE)
     private String password;
 
     @Column(nullable = false)
@@ -31,19 +33,17 @@ public class User {
     private String phoneNumber;
 
     @Enumerated(EnumType.STRING)
-    private UserRole role;  // SYSTEM_ADMIN, AIRLINE_ADMIN, CUSTOMER
+    private UserRole role;
 
-    // For AIRLINE_ADMIN only - which airline they belong to
     @ManyToOne
     @JoinColumn(name = "airline_id")
     private Airline airline;
 
     @Enumerated(EnumType.STRING)
-    private AccountStatus status;  // PENDING, ACTIVE, SUSPENDED, REJECTED
+    private AccountStatus status;
 
     private Boolean isActive = true;
 
-    // Who approved this user
     @ManyToOne
     @JoinColumn(name = "approved_by")
     private User approvedBy;
@@ -54,6 +54,10 @@ public class User {
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<Booking> bookings;
 
+    @JsonIgnore
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
+    private List<Review> reviews;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
@@ -63,13 +67,12 @@ public class User {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
 
-        // Set default status based on role
         if (this.role == UserRole.CUSTOMER) {
-            this.status = AccountStatus.ACTIVE;  // Customers are active directly
+            this.status = AccountStatus.ACTIVE;
         } else if (this.role == UserRole.SYSTEM_ADMIN) {
-            this.status = AccountStatus.ACTIVE;  // System admin is active
+            this.status = AccountStatus.ACTIVE;
         } else {
-            this.status = AccountStatus.PENDING;  // Airline admins need approval
+            this.status = AccountStatus.PENDING;
         }
     }
 
