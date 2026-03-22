@@ -72,8 +72,12 @@ public class User {
             this.status = AccountStatus.ACTIVE;
         } else if (this.role == UserRole.SYSTEM_ADMIN) {
             this.status = AccountStatus.ACTIVE;
-        } else {
-            this.status = AccountStatus.PENDING;
+        } else if (this.role == UserRole.AIRLINE_ADMIN) {
+            // ✅ AIRLINE_ADMIN should be PENDING by default
+            // But if status is already set from request, use that
+            if (this.status == null) {
+                this.status = AccountStatus.PENDING;
+            }
         }
     }
 

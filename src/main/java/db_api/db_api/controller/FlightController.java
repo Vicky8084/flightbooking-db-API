@@ -10,10 +10,12 @@ import db_api.db_api.service.FlightSearchService;
 import db_api.db_api.service.FlightService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -27,7 +29,6 @@ public class FlightController {
     @Autowired
     private FlightService flightService;
 
-    // ✅ CREATE FLIGHT - POST (YEH MISSING THA)
     @PostMapping
     public ResponseEntity<?> createFlight(@Valid @RequestBody Flight flight) {
         try {
@@ -37,7 +38,13 @@ public class FlightController {
                     "success", true,
                     "message", "Flight created successfully",
                     "flightId", createdFlight.getId(),
-                    "flightNumber", createdFlight.getFlightNumber()
+                    "flightNumber", createdFlight.getFlightNumber(),
+                    "departureTime", createdFlight.getDepartureTime(),
+                    "arrivalTime", createdFlight.getArrivalTime(),
+                    "status", createdFlight.getStatus(),
+                    "economyPrice", createdFlight.getBasePriceEconomy(),
+                    "businessPrice", createdFlight.getBasePriceBusiness(),
+                    "firstClassPrice", createdFlight.getBasePriceFirstClass()
             );
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -54,7 +61,6 @@ public class FlightController {
         }
     }
 
-    // ✅ GET ALL FLIGHTS
     @GetMapping
     public ResponseEntity<?> getAllFlights() {
         try {
@@ -68,7 +74,6 @@ public class FlightController {
         }
     }
 
-    // ✅ SEARCH FLIGHTS
     @PostMapping("/search")
     public ResponseEntity<?> searchFlights(@Valid @RequestBody FlightSearchDTO searchDTO) {
         try {
@@ -82,13 +87,12 @@ public class FlightController {
         }
     }
 
-    // ✅ GET AVAILABLE SEATS
     @GetMapping("/{flightId}/seats/available")
     public ResponseEntity<?> getAvailableSeats(@PathVariable Long flightId) {
         try {
             List<Seat> availableSeats = flightService.getAvailableSeats(flightId);
             return ResponseEntity.ok(availableSeats);
-        } catch (Exception e) {
+        } catch (BookingException e) {
             return ResponseEntity.badRequest().body(Map.of(
                     "success", false,
                     "message", e.getMessage()
@@ -96,7 +100,6 @@ public class FlightController {
         }
     }
 
-    // ✅ GET SEAT MAP
     @GetMapping("/{flightId}/seatmap")
     public ResponseEntity<?> getSeatMap(@PathVariable Long flightId) {
         try {
@@ -110,18 +113,16 @@ public class FlightController {
         }
     }
 
-    // ✅ GET FLIGHT BY ID
     @GetMapping("/{flightId}")
     public ResponseEntity<?> getFlightDetails(@PathVariable Long flightId) {
         try {
             Flight flight = flightService.getFlightDetails(flightId);
             return ResponseEntity.ok(flight);
-        } catch (Exception e) {
+        } catch (BookingException e) {
             return ResponseEntity.notFound().build();
         }
     }
 
-    // ✅ GET FLIGHTS BY AIRLINE
     @GetMapping("/airline/{airlineId}")
     public ResponseEntity<?> getFlightsByAirline(@PathVariable Long airlineId) {
         try {
@@ -135,7 +136,6 @@ public class FlightController {
         }
     }
 
-    // ✅ GET FLIGHTS BY STATUS
     @GetMapping("/status/{status}")
     public ResponseEntity<?> getFlightsByStatus(@PathVariable FlightStatus status) {
         try {
@@ -149,7 +149,6 @@ public class FlightController {
         }
     }
 
-    // ✅ DELAY FLIGHT
     @PutMapping("/{flightId}/delay")
     public ResponseEntity<?> delayFlight(@PathVariable Long flightId,
                                          @RequestParam int minutes) {
@@ -158,7 +157,13 @@ public class FlightController {
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "message", "Flight delayed by " + minutes + " minutes",
-                    "flight", flight
+                    "flightId", flight.getId(),
+                    "flightNumber", flight.getFlightNumber(),
+                    "newDepartureTime", flight.getDepartureTime(),
+                    "newArrivalTime", flight.getArrivalTime(),
+                    "delayCount", flight.getDelayCount(),
+                    "totalDelayMinutes", flight.getTotalDelayMinutes(),
+                    "status", flight.getStatus()
             ));
         } catch (BookingException e) {
             return ResponseEntity.badRequest().body(Map.of(
@@ -168,7 +173,50 @@ public class FlightController {
         }
     }
 
-    // ✅ UPDATE FLIGHT STATUS
+    @PutMapping("/{flightId}/reschedule")
+    public ResponseEntity<?> rescheduleFlight(
+            @PathVariable Long flightId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime newDepartureTime,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime newArrivalTime) {
+        try {
+            Flight flight = flightService.rescheduleFlight(flightId, newDepartureTime, newArrivalTime);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Flight rescheduled successfully",
+                    "flightId", flight.getId(),
+                    "flightNumber", flight.getFlightNumber(),
+                    "newDepartureTime", flight.getDepartureTime(),
+                    "newArrivalTime", flight.getArrivalTime(),
+                    "originalDepartureTime", flight.getOriginalDepartureTime(),
+                    "status", flight.getStatus()
+            ));
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
+    @PutMapping("/{flightId}/cancel")
+    public ResponseEntity<?> cancelFlight(@PathVariable Long flightId) {
+        try {
+            Flight flight = flightService.cancelFlight(flightId);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Flight cancelled successfully",
+                    "flightId", flight.getId(),
+                    "flightNumber", flight.getFlightNumber(),
+                    "status", flight.getStatus()
+            ));
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
     @PutMapping("/{flightId}/status")
     public ResponseEntity<?> updateFlightStatus(@PathVariable Long flightId,
                                                 @RequestBody Map<String, FlightStatus> request) {

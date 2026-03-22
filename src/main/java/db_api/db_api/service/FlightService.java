@@ -1,6 +1,5 @@
 package db_api.db_api.service;
 
-
 import db_api.db_api.dto.ConnectingFlightDTO;
 import db_api.db_api.dto.SeatInfo;
 import db_api.db_api.dto.SeatMapDTO;
@@ -8,13 +7,11 @@ import db_api.db_api.enums.FlightStatus;
 import db_api.db_api.enums.SeatClass;
 import db_api.db_api.enums.SeatType;
 import db_api.db_api.exception.BookingException;
-import db_api.db_api.model.Aircraft;
-import db_api.db_api.model.Airport;
-import db_api.db_api.model.Flight;
-import db_api.db_api.model.Seat;
+import db_api.db_api.model.*;
 import db_api.db_api.repository.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -24,7 +21,6 @@ import java.util.stream.Collectors;
 @Service
 public class FlightService {
 
-    // FlightService.java ke starting mein ye add karo
     @Autowired
     private AircraftRepository aircraftRepository;
 
@@ -38,139 +34,100 @@ public class FlightService {
     private PassengerSeatRepository passengerSeatRepository;
 
     @Autowired
-    private AirportRepository airportRepository;  // ✅ YEH ADD KARO
+    private AirportRepository airportRepository;
 
+    @Autowired
+    private BookingFlightRepository bookingFlightRepository;
 
     /**
-     * Get available seats for a specific flight
+     * Create a new flight
      */
-    public List<Seat> getAvailableSeats(Long flightId) throws BookingException {
-        Flight flight = flightRepository.findById(flightId)
-                .orElseThrow(() -> new BookingException("Flight not found with ID: " + flightId));
-
-        // Check if flight is scheduled
-        if (flight.getStatus() != FlightStatus.SCHEDULED) {
-            throw new BookingException("Flight is not available for booking. Current status: " + flight.getStatus());
+    @Transactional
+    public Flight createFlight(Flight flight) throws BookingException {
+        // Validate aircraft exists
+        if (flight.getAircraft() == null || flight.getAircraft().getId() == null) {
+            throw new BookingException("Aircraft ID is required");
         }
 
-        // Get all seats for this aircraft
-        List<Seat> allSeats = seatRepository.findByAircraftId(flight.getAircraft().getId());
+        // Check if flight number already exists
+        if (flightRepository.existsByFlightNumber(flight.getFlightNumber())) {
+            throw new BookingException("Flight number already exists: " + flight.getFlightNumber());
+        }
 
-        // Get booked seat IDs for this flight
+        // Validate departure time is in future
+        if (flight.getDepartureTime().isBefore(LocalDateTime.now())) {
+            throw new BookingException("Departure time must be in the future");
+        }
+
+        // Validate arrival time is after departure
+        if (flight.getArrivalTime().isBefore(flight.getDepartureTime())) {
+            throw new BookingException("Arrival time must be after departure time");
+        }
+
+        // Calculate duration
+        long durationMinutes = java.time.Duration.between(
+                flight.getDepartureTime(),
+                flight.getArrivalTime()
+        ).toMinutes();
+        flight.setDuration((int) durationMinutes);
+
+        // Fetch and set source airport
+        Airport sourceAirport = airportRepository.findByCode(flight.getSourceAirport().getCode())
+                .orElseThrow(() -> new BookingException("Source airport not found with code: " + flight.getSourceAirport().getCode()));
+        flight.setSourceAirport(sourceAirport);
+
+        // Fetch and set destination airport
+        Airport destAirport = airportRepository.findByCode(flight.getDestinationAirport().getCode())
+                .orElseThrow(() -> new BookingException("Destination airport not found with code: " + flight.getDestinationAirport().getCode()));
+        flight.setDestinationAirport(destAirport);
+
+        // Fetch and set aircraft
+        Aircraft aircraft = aircraftRepository.findById(flight.getAircraft().getId())
+                .orElseThrow(() -> new BookingException("Aircraft not found with ID: " + flight.getAircraft().getId()));
+        flight.setAircraft(aircraft);
+
+        // Set available seats from aircraft
+        flight.setAvailableEconomySeats(aircraft.getEconomySeats());
+        flight.setAvailableBusinessSeats(aircraft.getBusinessSeats());
+        flight.setAvailableFirstClassSeats(aircraft.getFirstClassSeats());
+
+        // Set current prices
+        flight.setCurrentPriceEconomy(flight.getBasePriceEconomy());
+        flight.setCurrentPriceBusiness(flight.getBasePriceBusiness());
+        flight.setCurrentPriceFirstClass(flight.getBasePriceFirstClass());
+
+        // Set status
+        flight.setStatus(FlightStatus.SCHEDULED);
+        flight.setDelayCount(0);
+        flight.setTotalDelayMinutes(0);
+        flight.setOriginalDepartureTime(flight.getDepartureTime());
+        flight.setOriginalArrivalTime(flight.getArrivalTime());
+
+        return flightRepository.save(flight);
+    }
+
+    /**
+     * Get available seats for a flight
+     */
+    public List<Seat> getAvailableSeats(Long flightId) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
+
+        // Check if booking is still allowed
+        if (!flight.canBook()) {
+            throw new BookingException("Booking for this flight is closed. Cutoff time was " +
+                    flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
+        }
+
+        List<Seat> allSeats = seatRepository.findByAircraftId(flight.getAircraft().getId());
         List<Long> bookedSeatIds = passengerSeatRepository.findBookedSeatIdsByFlightId(flightId);
 
-        // Filter available seats (not booked)
         return allSeats.stream()
                 .filter(seat -> !bookedSeatIds.contains(seat.getId()))
                 .collect(Collectors.toList());
     }
 
     /**
-     * Get available seats by class for a specific flight
-     */
-    public List<Seat> getAvailableSeatsByClass(Long flightId, SeatClass seatClass) throws BookingException {
-        Flight flight = flightRepository.findById(flightId)
-                .orElseThrow(() -> new BookingException("Flight not found with ID: " + flightId));
-
-        List<Seat> availableSeats = getAvailableSeats(flightId);
-
-        return availableSeats.stream()
-                .filter(seat -> seat.getSeatClass() == seatClass)
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Get flight details by ID
-     */
-    public Flight getFlightDetails(Long flightId) throws BookingException {
-        return flightRepository.findById(flightId)
-                .orElseThrow(() -> new BookingException("Flight not found with ID: " + flightId));
-    }
-
-    /**
-     * Get all flights by airline
-     */
-    public List<Flight> getFlightsByAirline(Long airlineId) throws BookingException {
-        List<Flight> flights = flightRepository.findByAircraftAirlineId(airlineId);
-
-        if (flights.isEmpty()) {
-            throw new BookingException("No flights found for airline ID: " + airlineId);
-        }
-
-        return flights;
-    }
-
-    /**
-     * Get flights by status
-     */
-    public List<Flight> getFlightsByStatus(FlightStatus status) {
-        return flightRepository.findByStatus(status);
-    }
-
-    /**
-     * Update flight status (for airline dashboard)
-     */
-    public Flight updateFlightStatus(Long flightId, FlightStatus newStatus) throws BookingException {
-        Flight flight = getFlightDetails(flightId);
-
-        // Validate status transition
-        validateStatusTransition(flight.getStatus(), newStatus);
-
-        flight.setStatus(newStatus);
-        return flightRepository.save(flight);
-    }
-
-    /**
-     * Validate if status transition is allowed
-     */
-    private void validateStatusTransition(FlightStatus currentStatus, FlightStatus newStatus)
-            throws BookingException {
-
-        if (currentStatus == FlightStatus.CANCELLED) {
-            throw new BookingException("Cannot change status of cancelled flight");
-        }
-
-        if (currentStatus == FlightStatus.COMPLETED) {
-            throw new BookingException("Cannot change status of completed flight");
-        }
-
-        if (currentStatus == newStatus) {
-            throw new BookingException("Flight is already in " + currentStatus + " status");
-        }
-
-        // Add more business rules as needed
-        if (currentStatus == FlightStatus.SCHEDULED && newStatus == FlightStatus.COMPLETED) {
-            throw new BookingException("Flight cannot be marked as completed before departure");
-        }
-    }
-
-    /**
-     * Delay a flight
-     */
-    public Flight delayFlight(Long flightId, int delayMinutes) throws BookingException {
-        Flight flight = getFlightDetails(flightId);
-
-        if (flight.getStatus() != FlightStatus.SCHEDULED) {
-            throw new BookingException("Only scheduled flights can be delayed");
-        }
-
-        // Update arrival and departure times
-        flight.setDepartureTime(flight.getDepartureTime().plusMinutes(delayMinutes));
-        flight.setArrivalTime(flight.getArrivalTime().plusMinutes(delayMinutes));
-        flight.setStatus(FlightStatus.DELAYED);
-
-        // Update duration if needed
-        long newDuration = java.time.Duration.between(
-                flight.getDepartureTime(),
-                flight.getArrivalTime()
-        ).toMinutes();
-        flight.setDuration((int) newDuration);
-
-        return flightRepository.save(flight);
-    }
-
-    /**
-     * Get seat map for a flight (organized by class and position)
+     * Get seat map with availability and prices calculated from flight base price
      */
     public SeatMapDTO getSeatMap(Long flightId) throws BookingException {
         Flight flight = getFlightDetails(flightId);
@@ -180,8 +137,9 @@ public class FlightService {
         SeatMapDTO seatMap = new SeatMapDTO();
         seatMap.setFlightId(flightId);
         seatMap.setFlightNumber(flight.getFlightNumber());
+        seatMap.setCanBook(flight.canBook());
+        seatMap.setBookingCutoffTime(flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
 
-        // Organize seats by class
         for (Seat seat : allSeats) {
             SeatInfo seatInfo = new SeatInfo();
             seatInfo.setSeatId(seat.getId());
@@ -192,9 +150,22 @@ public class FlightService {
             seatInfo.setExtraPrice(seat.getExtraPrice());
             seatInfo.setIsAvailable(!bookedSeatIds.contains(seat.getId()));
 
-            // Calculate price for this seat on this flight
             if (seatInfo.getIsAvailable()) {
-                seatInfo.setPrice(calculateSeatPrice(flight, seat));
+                // Get base price from FLIGHT based on seat class
+                double flightBasePrice;
+                switch (seat.getSeatClass()) {
+                    case BUSINESS:
+                        flightBasePrice = flight.getCurrentPrice("BUSINESS");
+                        break;
+                    case FIRST:
+                        flightBasePrice = flight.getCurrentPrice("FIRST");
+                        break;
+                    default:
+                        flightBasePrice = flight.getCurrentPrice("ECONOMY");
+                }
+
+                // Calculate final price using seat's calculateFinalPrice method
+                seatInfo.setPrice(seat.calculateFinalPrice(flightBasePrice));
             }
 
             switch (seat.getSeatClass()) {
@@ -214,171 +185,136 @@ public class FlightService {
     }
 
     /**
-     * Calculate seat price (reuse from BookingService)
+     * Delay a flight - can be done multiple times
      */
-    private double calculateSeatPrice(Flight flight, Seat seat) {
-        double basePrice;
+    @Transactional
+    public Flight delayFlight(Long flightId, int delayMinutes) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
 
-        switch (seat.getSeatClass()) {
-            case BUSINESS:
-                basePrice = flight.getBasePriceBusiness();
-                break;
-            case FIRST:
-                basePrice = flight.getBasePriceFirstClass();
-                break;
-            default:
-                basePrice = flight.getBasePriceEconomy();
+        if (flight.getStatus() != FlightStatus.SCHEDULED) {
+            throw new BookingException("Only scheduled flights can be delayed");
         }
 
-        // Add extras
-        if (seat.getSeatType() == SeatType.WINDOW) {
-            basePrice += 500;
+        if (delayMinutes > 360) {
+            throw new BookingException("Cannot delay flight by more than 6 hours");
         }
-        if (seat.getHasExtraLegroom()) {
-            basePrice += 1000;
-        }
-        if (seat.getIsNearExit()) {
-            basePrice += 750;
-        }
-        basePrice += seat.getExtraPrice() != null ? seat.getExtraPrice() : 0;
 
-        return basePrice;
+        flight.setDepartureTime(flight.getDepartureTime().plusMinutes(delayMinutes));
+        flight.setArrivalTime(flight.getArrivalTime().plusMinutes(delayMinutes));
+
+        long newDuration = java.time.Duration.between(
+                flight.getDepartureTime(),
+                flight.getArrivalTime()
+        ).toMinutes();
+        flight.setDuration((int) newDuration);
+
+        flight.setDelayCount(flight.getDelayCount() + 1);
+        flight.setTotalDelayMinutes(flight.getTotalDelayMinutes() + delayMinutes);
+        flight.setStatus(FlightStatus.DELAYED);
+
+        return flightRepository.save(flight);
     }
 
-    // FlightSearchService.java mein findConnectingFlights method update karo:
+    /**
+     * Reschedule a flight
+     */
+    @Transactional
+    public Flight rescheduleFlight(Long flightId, LocalDateTime newDepartureTime, LocalDateTime newArrivalTime)
+            throws BookingException {
+        Flight flight = getFlightDetails(flightId);
 
-    private List<ConnectingFlightDTO> findConnectingFlights(Airport source, Airport destination,
-                                                            LocalDateTime startOfDay, LocalDateTime endOfDay) {
-        List<ConnectingFlightDTO> connectingFlights = new ArrayList<>();
-
-        // Find flights from source to intermediate airports
-        List<Flight> firstLegFlights = flightRepository
-                .findBySourceAirportCodeAndDepartureTimeBetween(source.getCode(), startOfDay, endOfDay);
-
-        for (Flight firstLeg : firstLegFlights) {
-            // Skip if first leg itself goes to destination
-            if (firstLeg.getDestinationAirport().getCode().equals(destination.getCode())) {
-                continue;
-            }
-
-            // Find connecting flights from first leg's destination to our destination
-            LocalDateTime minConnectionTime = firstLeg.getArrivalTime().plusHours(1);
-            LocalDateTime maxConnectionTime = firstLeg.getArrivalTime().plusHours(6);
-
-            List<Flight> secondLegFlights = flightRepository
-                    .findBySourceAirportCodeAndDestinationAirportCodeAndStatus(
-                            firstLeg.getDestinationAirport().getCode(),
-                            destination.getCode(),
-                            FlightStatus.SCHEDULED);
-
-            for (Flight secondLeg : secondLegFlights) {
-                if (!secondLeg.getDepartureTime().isBefore(minConnectionTime) &&
-                        !secondLeg.getDepartureTime().isAfter(maxConnectionTime)) {
-
-                    // Create connecting flight with two segments
-                    List<Flight> segments = new ArrayList<>();
-                    segments.add(firstLeg);
-                    segments.add(secondLeg);
-
-                    ConnectingFlightDTO connectingFlight = new ConnectingFlightDTO(segments);
-                    connectingFlights.add(connectingFlight);
-                }
-            }
-
-            // Also look for three-segment connections (optional)
-            findThreeSegmentConnections(firstLeg, destination, connectingFlights);
+        if (flight.getStatus() == FlightStatus.CANCELLED || flight.getStatus() == FlightStatus.COMPLETED) {
+            throw new BookingException("Cannot reschedule cancelled or completed flight");
         }
 
-        return connectingFlights;
-    }
-
-    private void findThreeSegmentConnections(Flight firstLeg, Airport destination,
-                                             List<ConnectingFlightDTO> connectingFlights) {
-        // Find second leg to intermediate airport
-        List<Flight> secondLegFlights = flightRepository
-                .findBySourceAirportCodeAndDepartureTimeBetween(
-                        firstLeg.getDestinationAirport().getCode(),
-                        firstLeg.getArrivalTime().plusHours(1),
-                        firstLeg.getArrivalTime().plusHours(4));
-
-        for (Flight secondLeg : secondLegFlights) {
-            // Skip if second leg goes to destination
-            if (secondLeg.getDestinationAirport().getCode().equals(destination.getCode())) {
-                continue;
-            }
-
-            // Find third leg to destination
-            LocalDateTime minConnectionTime = secondLeg.getArrivalTime().plusHours(1);
-            LocalDateTime maxConnectionTime = secondLeg.getArrivalTime().plusHours(4);
-
-            List<Flight> thirdLegFlights = flightRepository
-                    .findBySourceAirportCodeAndDestinationAirportCodeAndStatus(
-                            secondLeg.getDestinationAirport().getCode(),
-                            destination.getCode(),
-                            FlightStatus.SCHEDULED);
-
-            for (Flight thirdLeg : thirdLegFlights) {
-                if (!thirdLeg.getDepartureTime().isBefore(minConnectionTime) &&
-                        !thirdLeg.getDepartureTime().isAfter(maxConnectionTime)) {
-
-                    List<Flight> segments = new ArrayList<>();
-                    segments.add(firstLeg);
-                    segments.add(secondLeg);
-                    segments.add(thirdLeg);
-
-                    ConnectingFlightDTO connectingFlight = new ConnectingFlightDTO(segments);
-                    connectingFlights.add(connectingFlight);
-                }
-            }
+        if (newDepartureTime.isBefore(LocalDateTime.now())) {
+            throw new BookingException("New departure time must be in the future");
         }
 
+        if (newArrivalTime.isBefore(newDepartureTime)) {
+            throw new BookingException("Arrival time must be after departure time");
+        }
 
+        if (flight.getOriginalDepartureTime() == null) {
+            flight.setOriginalDepartureTime(flight.getDepartureTime());
+            flight.setOriginalArrivalTime(flight.getArrivalTime());
+        }
+
+        flight.setDepartureTime(newDepartureTime);
+        flight.setArrivalTime(newArrivalTime);
+
+        long newDuration = java.time.Duration.between(newDepartureTime, newArrivalTime).toMinutes();
+        flight.setDuration((int) newDuration);
+
+        flight.setStatus(FlightStatus.SCHEDULED);
+
+        return flightRepository.save(flight);
     }
 
+    /**
+     * Cancel a flight
+     */
+    @Transactional
+    public Flight cancelFlight(Long flightId) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
 
-    // FlightService.java mein ye method add karo (already tumne add kiya tha)
+        if (flight.getStatus() == FlightStatus.CANCELLED) {
+            throw new BookingException("Flight is already cancelled");
+        }
+
+        if (flight.getStatus() == FlightStatus.COMPLETED) {
+            throw new BookingException("Cannot cancel completed flight");
+        }
+
+        flight.setStatus(FlightStatus.CANCELLED);
+        return flightRepository.save(flight);
+    }
+
+    /**
+     * Update flight status
+     */
+    public Flight updateFlightStatus(Long flightId, FlightStatus newStatus) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
+
+        if (flight.getStatus() == FlightStatus.CANCELLED) {
+            throw new BookingException("Cannot change status of cancelled flight");
+        }
+
+        if (flight.getStatus() == FlightStatus.COMPLETED) {
+            throw new BookingException("Cannot change status of completed flight");
+        }
+
+        flight.setStatus(newStatus);
+        return flightRepository.save(flight);
+    }
+
+    /**
+     * Get flight details
+     */
+    public Flight getFlightDetails(Long flightId) throws BookingException {
+        return flightRepository.findById(flightId)
+                .orElseThrow(() -> new BookingException("Flight not found with ID: " + flightId));
+    }
+
+    /**
+     * Get flights by airline
+     */
+    public List<Flight> getFlightsByAirline(Long airlineId) throws BookingException {
+        List<Flight> flights = flightRepository.findByAircraftAirlineId(airlineId);
+        return flights;
+    }
+
+    /**
+     * Get all flights
+     */
     public List<Flight> getAllFlights() {
         return flightRepository.findAll();
     }
 
-    // FlightService.java - createFlight method update karo
-
-    public Flight createFlight(Flight flight) throws BookingException {
-        // Validate aircraft exists
-        if (flight.getAircraft() == null || flight.getAircraft().getId() == null) {
-            throw new BookingException("Aircraft ID is required");
-        }
-
-        // Check if flight number already exists
-        if (flightRepository.existsByFlightNumber(flight.getFlightNumber())) {
-            throw new BookingException("Flight number already exists: " + flight.getFlightNumber());
-        }
-
-        // ✅ Fetch and set source airport from database using code
-        if (flight.getSourceAirport() == null || flight.getSourceAirport().getCode() == null) {
-            throw new BookingException("Source airport code is required");
-        }
-        Airport sourceAirport = airportRepository.findByCode(flight.getSourceAirport().getCode())
-                .orElseThrow(() -> new BookingException("Source airport not found with code: " + flight.getSourceAirport().getCode()));
-        flight.setSourceAirport(sourceAirport);
-
-        // ✅ Fetch and set destination airport from database using code
-        if (flight.getDestinationAirport() == null || flight.getDestinationAirport().getCode() == null) {
-            throw new BookingException("Destination airport code is required");
-        }
-        Airport destAirport = airportRepository.findByCode(flight.getDestinationAirport().getCode())
-                .orElseThrow(() -> new BookingException("Destination airport not found with code: " + flight.getDestinationAirport().getCode()));
-        flight.setDestinationAirport(destAirport);
-
-        // Set available seats from aircraft
-        Aircraft aircraft = aircraftRepository.findById(flight.getAircraft().getId())
-                .orElseThrow(() -> new BookingException("Aircraft not found with ID: " + flight.getAircraft().getId()));
-        flight.setAircraft(aircraft);
-
-        flight.setAvailableEconomySeats(aircraft.getEconomySeats());
-        flight.setAvailableBusinessSeats(aircraft.getBusinessSeats());
-        flight.setAvailableFirstClassSeats(aircraft.getFirstClassSeats());
-
-        return flightRepository.save(flight);
+    /**
+     * Get flights by status
+     */
+    public List<Flight> getFlightsByStatus(FlightStatus status) {
+        return flightRepository.findByStatus(status);
     }
 }

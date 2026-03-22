@@ -48,11 +48,9 @@ public class UserController {
     @PostMapping
     public ResponseEntity<?> createUser(@Valid @RequestBody User user) {
         try {
-            // ✅ Password is already encrypted from Auth API
+            // ✅ Allow status to be set from request (for AIRLINE_ADMIN)
+            // If status not set, default will be applied in @PrePersist
             User createdUser = userService.createUser(user);
-
-            // ✅ Return safe response without password
-            UserResponse safeResponse = toUserResponse(createdUser);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -60,8 +58,7 @@ public class UserController {
             response.put("userId", createdUser.getId());
             response.put("email", createdUser.getEmail());
             response.put("role", createdUser.getRole());
-            response.put("status", createdUser.getStatus());
-            // ✅ No password in response
+            response.put("status", createdUser.getStatus());  // ✅ Return actual status
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (BookingException e) {

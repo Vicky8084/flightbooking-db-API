@@ -3,6 +3,7 @@ package db_api.db_api.controller;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.Aircraft;
 import db_api.db_api.service.AircraftService;
+import db_api.db_api.service.SeatGeneratorService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -20,6 +21,9 @@ public class AircraftController {
     @Autowired
     private AircraftService aircraftService;
 
+    @Autowired
+    private SeatGeneratorService seatGeneratorService;
+
     @PostMapping
     public ResponseEntity<?> createAircraft(@Valid @RequestBody Aircraft aircraft) {
         try {
@@ -27,10 +31,17 @@ public class AircraftController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("message", "Aircraft created successfully");
+            response.put("message", "Aircraft created successfully with seats");
             response.put("aircraftId", createdAircraft.getId());
             response.put("registrationNumber", createdAircraft.getRegistrationNumber());
             response.put("model", createdAircraft.getModel());
+            response.put("totalSeats", createdAircraft.getTotalSeats());
+            response.put("seatDistribution", Map.of(
+                    "economy", createdAircraft.getEconomySeats(),
+                    "business", createdAircraft.getBusinessSeats(),
+                    "firstClass", createdAircraft.getFirstClassSeats()
+            ));
+            // ❌ NO PRICE FIELDS IN RESPONSE
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (BookingException e) {

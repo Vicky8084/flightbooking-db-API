@@ -336,4 +336,33 @@ public class BookingService {
         return bookings;
     }
 
+    // Add this method to BookingService.java
+
+    private void validateBooking(Flight flight, List<Long> seatIds) throws BookingException {
+        // ✅ Check if flight can be booked
+        if (!flight.canBook()) {
+            throw new BookingException("Booking for this flight is closed. Cutoff time was: " +
+                    flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
+        }
+
+        // ✅ Check if flight is scheduled
+        if (flight.getStatus() != FlightStatus.SCHEDULED) {
+            throw new BookingException("Flight is not available for booking. Status: " + flight.getStatus());
+        }
+
+        // ✅ Check if seats are available
+        List<Long> bookedSeats = passengerSeatRepository.findBookedSeatIdsByFlightId(flight.getId());
+        for (Long seatId : seatIds) {
+            if (bookedSeats.contains(seatId)) {
+                Seat seat = seatRepository.findById(seatId).orElseThrow();
+                throw new BookingException("Seat " + seat.getSeatNumber() + " is already booked");
+            }
+        }
+
+        // ✅ Check if departure is in future
+        if (flight.getDepartureTime().isBefore(LocalDateTime.now())) {
+            throw new BookingException("Flight has already departed");
+        }
+    }
+
 }
