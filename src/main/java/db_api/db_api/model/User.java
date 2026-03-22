@@ -24,7 +24,7 @@ public class User {
     @Column(nullable = false)
     // ✅ REMOVED @JsonProperty(access = WRITE_ONLY) so password can be read
     // ✅ Added @JsonProperty for both read and write
-    @JsonProperty(access = JsonProperty.Access.READ_WRITE)
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 
     @Column(nullable = false)
@@ -47,6 +47,7 @@ public class User {
     @ManyToOne
     @JoinColumn(name = "approved_by")
     private User approvedBy;
+
 
     private LocalDateTime approvedAt;
 
@@ -80,4 +81,6 @@ public class User {
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
+
+
 }

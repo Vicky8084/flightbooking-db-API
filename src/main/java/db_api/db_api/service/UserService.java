@@ -19,22 +19,25 @@ public class UserService {
     @Autowired
     private UserRepository userRepository;
 
+    /**
+     * Create a new user
+     * ✅ Password is already encrypted when received from Auth API
+     * ✅ Store as-is (already hashed)
+     */
     public User createUser(User user) throws BookingException {
         // Check if email already exists
         if (userRepository.existsByEmail(user.getEmail())) {
             throw new BookingException("Email already registered: " + user.getEmail());
         }
 
+        // ✅ Store password as-is (already encrypted by Auth API)
+        // ✅ No additional encoding here - Auth API handles encryption
         return userRepository.save(user);
     }
 
     public User getUserById(Long id) throws BookingException {
         return userRepository.findById(id)
                 .orElseThrow(() -> new BookingException("User not found with ID: " + id));
-    }
-
-    public Optional<User> getUserByEmail(String email) {
-        return userRepository.findByEmail(email);
     }
 
     public List<User> getAllUsers() {
@@ -60,10 +63,12 @@ public class UserService {
 
     /**
      * Update user password
+     * ✅ Password is already encrypted when received from Auth API
      */
     @Transactional
     public User updatePassword(Long userId, String newPassword) throws BookingException {
         User user = getUserById(userId);
+        // ✅ Store password as-is (already encrypted by Auth API)
         user.setPassword(newPassword);
         return userRepository.save(user);
     }
@@ -73,6 +78,8 @@ public class UserService {
 
         user.setFullName(userDetails.getFullName());
         user.setPhoneNumber(userDetails.getPhoneNumber());
+
+        // ✅ Only update password if provided (already encrypted)
         if (userDetails.getPassword() != null && !userDetails.getPassword().isEmpty()) {
             user.setPassword(userDetails.getPassword());
         }
@@ -103,5 +110,9 @@ public class UserService {
     public void deleteUser(Long id) throws BookingException {
         User user = getUserById(id);
         userRepository.delete(user);
+    }
+
+    public Optional<User> getUserByEmail(String email) {
+        return userRepository.findByEmail(email);
     }
 }
