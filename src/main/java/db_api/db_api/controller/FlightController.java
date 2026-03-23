@@ -235,4 +235,52 @@ public class FlightController {
             ));
         }
     }
+
+
+    // Add these methods to existing FlightController.java
+
+    /**
+     * Get price breakdown for a flight
+     */
+    @GetMapping("/{flightId}/price-breakdown")
+    public ResponseEntity<?> getPriceBreakdown(
+            @PathVariable Long flightId,
+            @RequestParam String seatClass,
+            @RequestParam String fareClassCode) {
+        try {
+            Map<String, Object> breakdown = flightService.getPriceBreakdown(flightId, seatClass, fareClassCode);
+            return ResponseEntity.ok(breakdown);
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", e.getMessage()));
+        }
+    }
+
+    /**
+     * Update dynamic pricing for a flight
+     */
+    @PutMapping("/{flightId}/update-pricing")
+    public ResponseEntity<?> updateDynamicPricing(@PathVariable Long flightId) {
+        try {
+            flightService.updateDynamicPricing(flightId);
+            Flight flight = flightService.getFlightDetails(flightId);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Dynamic pricing updated",
+                    "economyPrice", flight.getCurrentPriceEconomy(),
+                    "businessPrice", flight.getCurrentPriceBusiness(),
+                    "firstClassPrice", flight.getCurrentPriceFirstClass()
+            ));
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", e.getMessage()));
+        }
+    }
+
+    /**
+     * Update all flights dynamic pricing (scheduled job)
+     */
+    @PostMapping("/update-all-pricing")
+    public ResponseEntity<?> updateAllDynamicPricing() {
+        flightService.updateAllDynamicPricing();
+        return ResponseEntity.ok(Map.of("success", true, "message", "All flights pricing updated"));
+    }
 }

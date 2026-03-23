@@ -11,7 +11,7 @@ import java.util.Optional;
 @Repository
 public interface AirportRepository extends JpaRepository<Airport, Long> {
 
-    // ✅ **YEH METHOD ADD KARO - Code se airport find karne ke liye**
+    // ✅ Find airport by code
     Optional<Airport> findByCode(String code);
 
     // Check if exists
@@ -23,4 +23,10 @@ public interface AirportRepository extends JpaRepository<Airport, Long> {
 
     // Find by country
     List<Airport> findByCountry(String country);
+
+    // ✅ Find by name
+    Optional<Airport> findByName(String name);
+
+    // ✅ Find all airports in a country
+    List<Airport> findAllByCountryOrderByCityAsc(String country);
 }

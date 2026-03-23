@@ -12,6 +12,7 @@ import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.*;
 import db_api.db_api.repository.*;
 import jakarta.transaction.Transactional;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Random;
 
 @Service
+@Slf4j
 public class BookingService {
 
     @Autowired
@@ -49,6 +51,8 @@ public class BookingService {
 
     @Transactional
     public Booking createBooking(BookingRequestDTO request) throws BookingException {
+        log.info("Creating booking for user ID: {}", request.getUserId());
+
         // Validate user
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new BookingException("User not found"));
@@ -71,18 +75,25 @@ public class BookingService {
             Flight flight = flightRepository.findById(flightDTO.getFlightId())
                     .orElseThrow(() -> new BookingException("Flight not found: " + flightDTO.getFlightId()));
 
+            // ✅ Validate booking is still allowed (with dynamic pricing check)
+            if (!flight.canBook()) {
+                throw new BookingException("Booking for flight " + flight.getFlightNumber() +
+                        " is closed. Cutoff time was: " +
+                        flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
+            }
+
             // Check flight availability
             if (flight.getStatus() != FlightStatus.SCHEDULED) {
                 throw new BookingException("Flight is not available for booking: " + flight.getFlightNumber());
             }
 
-            // ✅ Create AND SAVE booking flight
+            // Create AND save booking flight
             BookingFlight bookingFlight = new BookingFlight();
             bookingFlight.setBooking(savedBooking);
             bookingFlight.setFlight(flight);
             bookingFlight.setFlightSequence(flightDTO.getSequence() != null ? flightDTO.getSequence() : 1);
 
-            // ✅ IMPORTANT: Save bookingFlight before using it in PassengerSeat
+            // Save bookingFlight before using it in PassengerSeat
             BookingFlight savedBookingFlight = bookingFlightRepository.save(bookingFlight);
 
             // For each passenger in this flight
@@ -106,7 +117,7 @@ public class BookingService {
                     passengers.add(passenger);
                 }
 
-                // Check seat availability
+                // Check seat availability with pessimistic lock
                 Seat seat = seatRepository.findById(psDTO.getSeatId())
                         .orElseThrow(() -> new BookingException("Seat not found"));
 
@@ -115,23 +126,27 @@ public class BookingService {
                     throw new BookingException("Seat does not belong to this aircraft");
                 }
 
-                // Check if seat is already booked
+                // ✅ Check if seat is already booked (with lock)
                 if (passengerSeatRepository.isSeatBookedForFlight(seat.getId(), flight.getId())) {
                     throw new BookingException("Seat " + seat.getSeatNumber() + " is already booked");
                 }
 
-                // Calculate seat price
-                double seatPrice = calculateSeatPrice(flight, seat);
+                // ✅ Calculate seat price using dynamic pricing
+                double flightBasePrice = flight.getCurrentPrice(seat.getSeatClass().name());
+                double seatPrice = seat.calculateFinalPrice(flightBasePrice);
                 totalAmount += seatPrice;
 
-                // ✅ Use savedBookingFlight instead of unsaved bookingFlight
+                // Create passenger seat assignment
                 PassengerSeat passengerSeat = new PassengerSeat();
-                passengerSeat.setBookingFlight(savedBookingFlight);  // ✅ FIXED
+                passengerSeat.setBookingFlight(savedBookingFlight);
                 passengerSeat.setPassenger(passenger);
                 passengerSeat.setSeat(seat);
                 passengerSeat.setSeatPrice(seatPrice);
 
                 passengerSeatRepository.save(passengerSeat);
+
+                log.debug("Seat {} assigned to passenger {} for flight {}",
+                        seat.getSeatNumber(), passenger.getFullName(), flight.getFlightNumber());
             }
 
             // Update available seats count on flight
@@ -151,14 +166,20 @@ public class BookingService {
         savedBooking.setStatus(BookingStatus.CONFIRMED);
         savedBooking.setTotalAmount(totalAmount);
 
-        return bookingRepository.save(savedBooking);
+        Booking finalBooking = bookingRepository.save(savedBooking);
+        log.info("✅ Booking created successfully! PNR: {}, Total: ₹{}",
+                finalBooking.getPnrNumber(), totalAmount);
+
+        return finalBooking;
     }
+
     private String generatePNR() {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         StringBuilder pnr = new StringBuilder();
         Random random = new Random();
 
         do {
+            pnr.setLength(0);
             for (int i = 0; i < 6; i++) {
                 pnr.append(chars.charAt(random.nextInt(chars.length())));
             }
@@ -167,52 +188,12 @@ public class BookingService {
         return pnr.toString();
     }
 
-    private double calculateSeatPrice(Flight flight, Seat seat) {
-        double basePrice;
-
-        switch (seat.getSeatClass()) {
-            case BUSINESS:
-                basePrice = flight.getBasePriceBusiness();
-                break;
-            case FIRST:
-                basePrice = flight.getBasePriceFirstClass();
-                break;
-            default:
-                basePrice = flight.getBasePriceEconomy();
-        }
-
-        // Add extra for special seats
-        if (seat.getSeatType() == SeatType.WINDOW) {
-            basePrice += 500; // Window seat premium
-        }
-
-        if (seat.getHasExtraLegroom()) {
-            basePrice += 1000; // Extra legroom premium
-        }
-
-        if (seat.getIsNearExit()) {
-            basePrice += 750; // Exit row premium
-        }
-
-        // Add any configured extra price
-        basePrice += seat.getExtraPrice() != null ? seat.getExtraPrice() : 0;
-
-        return basePrice;
-    }
-
     private void updateAvailableSeats(Flight flight) {
-        // Count booked seats for this flight
         Long bookedCount = passengerSeatRepository.countBookedSeatsForFlight(flight.getId());
-
-        // Update available counts based on seat class
-        // This is simplified - in reality, you'd track per class
         int totalSeats = flight.getAircraft().getTotalSeats();
         flight.setAvailableEconomySeats(totalSeats - bookedCount.intValue());
-
         flightRepository.save(flight);
     }
-
-    // service/BookingService.java (mein ye methods add karo)
 
     /**
      * Find booking by PNR number
@@ -226,20 +207,27 @@ public class BookingService {
                 .orElseThrow(() -> new BookingException("Booking not found with PNR: " + pnr));
     }
 
-
     /**
-     * Find bookings by user ID and status (optional utility method)
+     * Find bookings by user ID and status
      */
     public List<Booking> findByUserIdAndStatus(Long userId, BookingStatus status) throws BookingException {
-        if (userId == null || status == null) {
-            throw new BookingException("User ID and Status cannot be null");
+        if (userId == null) {
+            throw new BookingException("User ID cannot be null");
+        }
+        if (status == null) {
+            throw new BookingException("Status cannot be null");
         }
 
         return bookingRepository.findByUserIdAndStatus(userId, status);
     }
 
+    /**
+     * Cancel booking and release seats
+     */
     @Transactional
     public Booking cancelBooking(Long bookingId) throws BookingException {
+        log.info("Cancelling booking ID: {}", bookingId);
+
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BookingException("Booking not found with ID: " + bookingId));
 
@@ -252,7 +240,7 @@ public class BookingService {
             throw new BookingException("Completed bookings cannot be cancelled");
         }
 
-        // RELEASE SEATS - Make them available again
+        // Release seats
         releaseSeats(booking);
 
         // Update booking status
@@ -264,7 +252,10 @@ public class BookingService {
             paymentRepository.save(booking.getPayment());
         }
 
-        return bookingRepository.save(booking);
+        Booking cancelledBooking = bookingRepository.save(booking);
+        log.info("✅ Booking {} cancelled successfully", booking.getPnrNumber());
+
+        return cancelledBooking;
     }
 
     /**
@@ -280,7 +271,7 @@ public class BookingService {
     }
 
     /**
-     * Get booking details with all associations (eager loading)
+     * Get booking details with all associations
      */
     @Transactional
     public Booking getBookingDetails(Long bookingId) throws BookingException {
@@ -300,7 +291,6 @@ public class BookingService {
      * Release all seats for this booking
      */
     private void releaseSeats(Booking booking) {
-        // Get all passenger seats for this booking
         List<BookingFlight> bookingFlights = booking.getBookingFlights();
 
         for (BookingFlight bookingFlight : bookingFlights) {
@@ -309,6 +299,7 @@ public class BookingService {
             // Delete all passenger seat assignments
             for (PassengerSeat passengerSeat : passengerSeats) {
                 passengerSeatRepository.delete(passengerSeat);
+                log.debug("Released seat ID: {}", passengerSeat.getSeat().getId());
             }
 
             // Update available seats count for the flight
@@ -316,8 +307,6 @@ public class BookingService {
             updateAvailableSeats(flight);
         }
     }
-
-    // Add this method to existing BookingService class
 
     /**
      * Find all bookings by user ID
@@ -327,42 +316,24 @@ public class BookingService {
             throw new BookingException("User ID cannot be null");
         }
 
-        // Check if user exists
         if (!userRepository.existsById(userId)) {
             throw new BookingException("User not found with ID: " + userId);
         }
 
-        List<Booking> bookings = bookingRepository.findByUserId(userId);
-        return bookings;
+        return bookingRepository.findByUserId(userId);
     }
 
-    // Add this method to BookingService.java
-
-    private void validateBooking(Flight flight, List<Long> seatIds) throws BookingException {
-        // ✅ Check if flight can be booked
-        if (!flight.canBook()) {
-            throw new BookingException("Booking for this flight is closed. Cutoff time was: " +
-                    flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
+    /**
+     * Get recent bookings for user
+     */
+    public List<Booking> getRecentUserBookings(Long userId, int limit) throws BookingException {
+        if (userId == null) {
+            throw new BookingException("User ID cannot be null");
         }
 
-        // ✅ Check if flight is scheduled
-        if (flight.getStatus() != FlightStatus.SCHEDULED) {
-            throw new BookingException("Flight is not available for booking. Status: " + flight.getStatus());
-        }
-
-        // ✅ Check if seats are available
-        List<Long> bookedSeats = passengerSeatRepository.findBookedSeatIdsByFlightId(flight.getId());
-        for (Long seatId : seatIds) {
-            if (bookedSeats.contains(seatId)) {
-                Seat seat = seatRepository.findById(seatId).orElseThrow();
-                throw new BookingException("Seat " + seat.getSeatNumber() + " is already booked");
-            }
-        }
-
-        // ✅ Check if departure is in future
-        if (flight.getDepartureTime().isBefore(LocalDateTime.now())) {
-            throw new BookingException("Flight has already departed");
-        }
+        List<Booking> allBookings = findByUserId(userId);
+        return allBookings.stream()
+                .limit(limit)
+                .collect(java.util.stream.Collectors.toList());
     }
-
 }

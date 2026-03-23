@@ -1,24 +1,24 @@
 package db_api.db_api.service;
 
-import db_api.db_api.dto.ConnectingFlightDTO;
 import db_api.db_api.dto.SeatInfo;
 import db_api.db_api.dto.SeatMapDTO;
 import db_api.db_api.enums.FlightStatus;
-import db_api.db_api.enums.SeatClass;
-import db_api.db_api.enums.SeatType;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.*;
 import db_api.db_api.repository.*;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class FlightService {
 
     @Autowired
@@ -39,11 +39,17 @@ public class FlightService {
     @Autowired
     private BookingFlightRepository bookingFlightRepository;
 
+    // ✅ FIXED: Added FareClassService dependency
+    @Autowired
+    private FareClassService fareClassService;
+
     /**
-     * Create a new flight
+     * Create a new flight with validation
      */
     @Transactional
     public Flight createFlight(Flight flight) throws BookingException {
+        log.info("Creating flight: {}", flight.getFlightNumber());
+
         // Validate aircraft exists
         if (flight.getAircraft() == null || flight.getAircraft().getId() == null) {
             throw new BookingException("Aircraft ID is required");
@@ -52,6 +58,11 @@ public class FlightService {
         // Check if flight number already exists
         if (flightRepository.existsByFlightNumber(flight.getFlightNumber())) {
             throw new BookingException("Flight number already exists: " + flight.getFlightNumber());
+        }
+
+        // Validate source and destination are different
+        if (flight.getSourceAirport().getCode().equals(flight.getDestinationAirport().getCode())) {
+            throw new BookingException("Source and destination airports cannot be the same");
         }
 
         // Validate departure time is in future
@@ -91,10 +102,21 @@ public class FlightService {
         flight.setAvailableBusinessSeats(aircraft.getBusinessSeats());
         flight.setAvailableFirstClassSeats(aircraft.getFirstClassSeats());
 
+        // Initialize sold seats to 0
+        flight.setSoldEconomySeats(0);
+        flight.setSoldBusinessSeats(0);
+        flight.setSoldFirstClassSeats(0);
+
         // Set current prices
         flight.setCurrentPriceEconomy(flight.getBasePriceEconomy());
         flight.setCurrentPriceBusiness(flight.getBasePriceBusiness());
         flight.setCurrentPriceFirstClass(flight.getBasePriceFirstClass());
+
+        // Set dynamic pricing multipliers
+        flight.setTimeMultiplier(1.0);
+        flight.setDemandMultiplier(1.0);
+        flight.setDayMultiplier(1.0);
+        flight.setFinalPriceMultiplier(1.0);
 
         // Set status
         flight.setStatus(FlightStatus.SCHEDULED);
@@ -103,12 +125,21 @@ public class FlightService {
         flight.setOriginalDepartureTime(flight.getDepartureTime());
         flight.setOriginalArrivalTime(flight.getArrivalTime());
 
-        return flightRepository.save(flight);
+        Flight savedFlight = flightRepository.save(flight);
+
+        // Update dynamic pricing after saving
+        savedFlight.updateAllCurrentPrices();
+        savedFlight = flightRepository.save(savedFlight);
+
+        log.info("✅ Flight created successfully: {}", savedFlight.getFlightNumber());
+
+        return savedFlight;
     }
 
     /**
-     * Get available seats for a flight
+     * Get available seats for a flight with pessimistic locking
      */
+    @Transactional
     public List<Seat> getAvailableSeats(Long flightId) throws BookingException {
         Flight flight = getFlightDetails(flightId);
 
@@ -118,8 +149,9 @@ public class FlightService {
                     flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
         }
 
+        // Use pessimistic lock to prevent race conditions
         List<Seat> allSeats = seatRepository.findByAircraftId(flight.getAircraft().getId());
-        List<Long> bookedSeatIds = passengerSeatRepository.findBookedSeatIdsByFlightId(flightId);
+        List<Long> bookedSeatIds = passengerSeatRepository.findBookedSeatIdsByFlightIdWithLock(flightId);
 
         return allSeats.stream()
                 .filter(seat -> !bookedSeatIds.contains(seat.getId()))
@@ -127,7 +159,7 @@ public class FlightService {
     }
 
     /**
-     * Get seat map with availability and prices calculated from flight base price
+     * Get seat map with availability
      */
     public SeatMapDTO getSeatMap(Long flightId) throws BookingException {
         Flight flight = getFlightDetails(flightId);
@@ -151,20 +183,8 @@ public class FlightService {
             seatInfo.setIsAvailable(!bookedSeatIds.contains(seat.getId()));
 
             if (seatInfo.getIsAvailable()) {
-                // Get base price from FLIGHT based on seat class
-                double flightBasePrice;
-                switch (seat.getSeatClass()) {
-                    case BUSINESS:
-                        flightBasePrice = flight.getCurrentPrice("BUSINESS");
-                        break;
-                    case FIRST:
-                        flightBasePrice = flight.getCurrentPrice("FIRST");
-                        break;
-                    default:
-                        flightBasePrice = flight.getCurrentPrice("ECONOMY");
-                }
-
-                // Calculate final price using seat's calculateFinalPrice method
+                // Use dynamic pricing
+                double flightBasePrice = flight.getCurrentPrice(seat.getSeatClass().name());
                 seatInfo.setPrice(seat.calculateFinalPrice(flightBasePrice));
             }
 
@@ -185,7 +205,7 @@ public class FlightService {
     }
 
     /**
-     * Delay a flight - can be done multiple times
+     * Delay a flight with validation
      */
     @Transactional
     public Flight delayFlight(Long flightId, int delayMinutes) throws BookingException {
@@ -197,6 +217,10 @@ public class FlightService {
 
         if (delayMinutes > 360) {
             throw new BookingException("Cannot delay flight by more than 6 hours");
+        }
+
+        if (delayMinutes < 1) {
+            throw new BookingException("Delay minutes must be positive");
         }
 
         flight.setDepartureTime(flight.getDepartureTime().plusMinutes(delayMinutes));
@@ -211,6 +235,9 @@ public class FlightService {
         flight.setDelayCount(flight.getDelayCount() + 1);
         flight.setTotalDelayMinutes(flight.getTotalDelayMinutes() + delayMinutes);
         flight.setStatus(FlightStatus.DELAYED);
+
+        log.info("✈️ Flight {} delayed by {} minutes. Total delays: {}",
+                flight.getFlightNumber(), delayMinutes, flight.getDelayCount());
 
         return flightRepository.save(flight);
     }
@@ -248,11 +275,13 @@ public class FlightService {
 
         flight.setStatus(FlightStatus.SCHEDULED);
 
+        log.info("✈️ Flight {} rescheduled to {}", flight.getFlightNumber(), newDepartureTime);
+
         return flightRepository.save(flight);
     }
 
     /**
-     * Cancel a flight
+     * Cancel a flight and notify affected bookings
      */
     @Transactional
     public Flight cancelFlight(Long flightId) throws BookingException {
@@ -267,6 +296,9 @@ public class FlightService {
         }
 
         flight.setStatus(FlightStatus.CANCELLED);
+
+        log.info("✈️ Flight {} cancelled", flight.getFlightNumber());
+
         return flightRepository.save(flight);
     }
 
@@ -285,6 +317,9 @@ public class FlightService {
         }
 
         flight.setStatus(newStatus);
+
+        log.info("✈️ Flight {} status updated to {}", flight.getFlightNumber(), newStatus);
+
         return flightRepository.save(flight);
     }
 
@@ -301,6 +336,9 @@ public class FlightService {
      */
     public List<Flight> getFlightsByAirline(Long airlineId) throws BookingException {
         List<Flight> flights = flightRepository.findByAircraftAirlineId(airlineId);
+        if (flights.isEmpty()) {
+            log.warn("No flights found for airline ID: {}", airlineId);
+        }
         return flights;
     }
 
@@ -316,5 +354,94 @@ public class FlightService {
      */
     public List<Flight> getFlightsByStatus(FlightStatus status) {
         return flightRepository.findByStatus(status);
+    }
+
+    /**
+     * Check if flight is available for booking with dynamic pricing
+     */
+    public boolean isFlightAvailable(Long flightId) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
+        return flight.getStatus() == FlightStatus.SCHEDULED && flight.canBook();
+    }
+
+    /**
+     * Update dynamic pricing for a flight
+     */
+    @Transactional
+    public void updateDynamicPricing(Long flightId) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
+        flight.updateAllCurrentPrices();
+        flightRepository.save(flight);
+        log.info("Dynamic pricing updated for flight: {}", flight.getFlightNumber());
+    }
+
+    /**
+     * Update dynamic pricing for all scheduled flights
+     */
+    @Transactional
+    public void updateAllDynamicPricing() {
+        List<Flight> flights = flightRepository.findByStatus(FlightStatus.SCHEDULED);
+        for (Flight flight : flights) {
+            flight.updateAllCurrentPrices();
+            flightRepository.save(flight);
+        }
+        log.info("Dynamic pricing updated for {} flights", flights.size());
+    }
+
+    /**
+     * Get price breakdown for a flight
+     */
+    public Map<String, Object> getPriceBreakdown(Long flightId, String seatClass, String fareClassCode) throws BookingException {
+        Flight flight = getFlightDetails(flightId);
+        FareClass fareClass = fareClassService.getFareClassByCode(fareClassCode);
+
+        double basePrice = getBasePriceForClass(flight, seatClass);
+        double fareMultiplier = fareClass.getPriceMultiplier();
+        double dynamicPrice = flight.calculateDynamicPrice(seatClass);
+
+        Map<String, Object> breakdown = new HashMap<>();
+        breakdown.put("flightNumber", flight.getFlightNumber());
+        breakdown.put("seatClass", seatClass);
+        breakdown.put("fareClass", fareClass.getCode());
+        breakdown.put("fareClassName", fareClass.getName());
+        breakdown.put("basePrice", basePrice);
+        breakdown.put("fareClassMultiplier", fareMultiplier);
+        breakdown.put("fareClassPrice", Math.round(basePrice * fareMultiplier));
+        breakdown.put("dynamicPrice", dynamicPrice);
+
+        // Add price factors
+        breakdown.put("timeMultiplier", flight.getTimeMultiplier());
+        breakdown.put("demandMultiplier", flight.getDemandMultiplier());
+        breakdown.put("dayMultiplier", flight.getDayMultiplier());
+        breakdown.put("finalMultiplier", flight.getFinalPriceMultiplier());
+
+        // Baggage allowance
+        Map<String, Object> baggage = new HashMap<>();
+        baggage.put("cabin", fareClass.getCabinBaggageKg());
+        baggage.put("checked", fareClass.getCheckInBaggageKg());
+        baggage.put("extraRatePerKg", fareClass.getExtraBaggageRatePerKg());
+        breakdown.put("baggageAllowance", baggage);
+
+        // Other benefits
+        breakdown.put("mealIncluded", fareClass.getMealIncluded());
+        breakdown.put("cancellationFee", fareClass.getCancellationFee());
+        breakdown.put("changeFee", fareClass.getChangeFee());
+        breakdown.put("seatSelectionFree", fareClass.getSeatSelectionFree());
+        breakdown.put("priorityCheckin", fareClass.getPriorityCheckin());
+        breakdown.put("priorityBoarding", fareClass.getPriorityBoarding());
+        breakdown.put("loungeAccess", fareClass.getLoungeAccess());
+
+        return breakdown;
+    }
+
+    private double getBasePriceForClass(Flight flight, String seatClass) {
+        switch (seatClass.toUpperCase()) {
+            case "BUSINESS":
+                return flight.getBasePriceBusiness();
+            case "FIRST":
+                return flight.getBasePriceFirstClass();
+            default:
+                return flight.getBasePriceEconomy();
+        }
     }
 }

@@ -231,4 +231,33 @@ public class UserController {
             ));
         }
     }
+    @GetMapping("/{id}/profile")
+    public ResponseEntity<?> getUserProfile(@PathVariable Long id) {
+        try {
+            User user = userService.getUserById(id);
+
+            Map<String, Object> profile = new HashMap<>();
+            profile.put("id", user.getId());
+            profile.put("email", user.getEmail());
+            profile.put("fullName", user.getFullName());
+            profile.put("phoneNumber", user.getPhoneNumber());
+            profile.put("role", user.getRole() != null ? user.getRole().name() : null);
+            profile.put("status", user.getStatus() != null ? user.getStatus().name() : null);
+            profile.put("isActive", user.getIsActive());
+            profile.put("createdAt", user.getCreatedAt());
+
+            if (user.getAirline() != null) {
+                profile.put("airlineId", user.getAirline().getId());
+                profile.put("airlineName", user.getAirline().getName());
+            }
+
+            return ResponseEntity.ok(profile);
+        } catch (BookingException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
 }
