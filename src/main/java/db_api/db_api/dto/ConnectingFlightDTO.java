@@ -1,11 +1,11 @@
 package db_api.db_api.dto;
 
-
 import db_api.db_api.model.Flight;
 import lombok.Data;
 
 import java.util.List;
 
+@Data
 public class ConnectingFlightDTO {
     private List<Flight> segments;
     private int totalDuration; // minutes
@@ -21,16 +21,32 @@ public class ConnectingFlightDTO {
     private List<String> layoverAirports;
     private List<Integer> layoverDurations;
 
+    // ✅ NEW: Hub & Spoke fields
+    private String connectionType; // "HUB", "NORMAL"
+    private String hubAirport; // Which hub was used
+    private boolean sameAirline; // Whether all segments are same airline
+    private boolean protectedConnection; // Whether airline protects the connection
 
-
-        // Constructor
     public ConnectingFlightDTO(List<Flight> segments) {
         this.segments = segments;
         this.numberOfStops = segments.size() - 1;
+        this.sameAirline = checkSameAirline(segments);
+        this.protectedConnection = this.sameAirline; // Same airline = protected
         calculateTotals();
         extractFlightNumbers();
         extractAirlines();
         extractLayoverInfo();
+    }
+
+    private boolean checkSameAirline(List<Flight> segments) {
+        if (segments.isEmpty()) return false;
+        Long firstAirlineId = segments.get(0).getAircraft().getAirline().getId();
+        for (Flight flight : segments) {
+            if (!flight.getAircraft().getAirline().getId().equals(firstAirlineId)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void calculateTotals() {
@@ -40,14 +56,9 @@ public class ConnectingFlightDTO {
 
         for (int i = 0; i < segments.size(); i++) {
             Flight flight = segments.get(i);
-
-            // Add flight duration
             totalDuration += flight.getDuration();
-
-            // Add flight price (using economy as base)
             totalPrice += flight.getBasePriceEconomy();
 
-            // Calculate layover between flights
             if (i < segments.size() - 1) {
                 Flight nextFlight = segments.get(i + 1);
                 long layover = java.time.Duration.between(
@@ -57,6 +68,16 @@ public class ConnectingFlightDTO {
                 totalLayoverTime += layover;
                 totalDuration += layover;
             }
+        }
+
+        // ✅ NEW: Discount for hub connections
+        if ("HUB".equals(connectionType)) {
+            totalPrice = totalPrice * 0.95; // 5% discount for hub connections
+        }
+
+        // ✅ NEW: Discount for same airline connections
+        if (sameAirline) {
+            totalPrice = totalPrice * 0.97; // Additional 3% discount for same airline
         }
 
         Flight firstFlight = segments.get(0);
@@ -97,35 +118,4 @@ public class ConnectingFlightDTO {
             layoverDurations.add((int) layover);
         }
     }
-
-    // Getters
-    public List<Flight> getSegments() { return segments; }
-    public int getTotalDuration() { return totalDuration; }
-    public int getTotalLayoverTime() { return totalLayoverTime; }
-    public double getTotalPrice() { return totalPrice; }
-    public String getSourceCode() { return sourceCode; }
-    public String getDestinationCode() { return destinationCode; }
-    public String getSourceCity() { return sourceCity; }
-    public String getDestinationCity() { return destinationCity; }
-    public int getNumberOfStops() { return numberOfStops; }
-    public List<String> getFlightNumbers() { return flightNumbers; }
-    public List<String> getAirlines() { return airlines; }
-    public List<String> getLayoverAirports() { return layoverAirports; }
-    public List<Integer> getLayoverDurations() { return layoverDurations; }
-
-    // Setters
-    public void setSegments(List<Flight> segments) { this.segments = segments; }
-    public void setTotalDuration(int totalDuration) { this.totalDuration = totalDuration; }
-    public void setTotalLayoverTime(int totalLayoverTime) { this.totalLayoverTime = totalLayoverTime; }
-    public void setTotalPrice(double totalPrice) { this.totalPrice = totalPrice; }
-    public void setSourceCode(String sourceCode) { this.sourceCode = sourceCode; }
-    public void setDestinationCode(String destinationCode) { this.destinationCode = destinationCode; }
-    public void setSourceCity(String sourceCity) { this.sourceCity = sourceCity; }
-    public void setDestinationCity(String destinationCity) { this.destinationCity = destinationCity; }
-    public void setNumberOfStops(int numberOfStops) { this.numberOfStops = numberOfStops; }
-    public void setFlightNumbers(List<String> flightNumbers) { this.flightNumbers = flightNumbers; }
-    public void setAirlines(List<String> airlines) { this.airlines = airlines; }
-    public void setLayoverAirports(List<String> layoverAirports) { this.layoverAirports = layoverAirports; }
-    public void setLayoverDurations(List<Integer> layoverDurations) { this.layoverDurations = layoverDurations; }
-
 }

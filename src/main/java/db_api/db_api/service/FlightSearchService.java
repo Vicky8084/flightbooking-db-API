@@ -8,15 +8,19 @@ import db_api.db_api.model.Flight;
 import db_api.db_api.repository.AirportRepository;
 import db_api.db_api.repository.FlightRepository;
 import db_api.db_api.repository.FlightSegmentRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class FlightSearchService {
 
     @Autowired
@@ -27,6 +31,13 @@ public class FlightSearchService {
 
     @Autowired
     private FlightSegmentRepository flightSegmentRepository;
+
+    // ✅ NEW: Hub airports from properties
+    @Value("${app.hub.airports:BOM,DEL,BLR}")
+    private String hubAirportsConfig;
+
+    @Value("${app.primary.hub:BOM}")
+    private String primaryHub;
 
     public List<Object> searchFlights(FlightSearchDTO searchDTO) {
         Airport source = airportRepository.findByCode(searchDTO.getSourceCode())
@@ -44,10 +55,17 @@ public class FlightSearchService {
         List<Flight> directFlights = findDirectFlights(source, destination, startOfDay, endOfDay);
         allResults.addAll(directFlights);
 
-        // 2. Search connecting flights if requested
+        // 2. Search connecting flights with hub preference
         if (searchDTO.getIncludeConnectingFlights()) {
-            List<ConnectingFlightDTO> connectingFlights = findConnectingFlights(source, destination, startOfDay, endOfDay);
-            allResults.addAll(connectingFlights);
+            // ✅ NEW: First try hub-based connections
+            List<ConnectingFlightDTO> hubConnections = findHubBasedConnections(source, destination, startOfDay, endOfDay);
+            allResults.addAll(hubConnections);
+
+            // ✅ NEW: If no hub connections, try normal connections
+            if (hubConnections.isEmpty()) {
+                List<ConnectingFlightDTO> normalConnections = findNormalConnectingFlights(source, destination, startOfDay, endOfDay);
+                allResults.addAll(normalConnections);
+            }
         }
 
         // 3. Apply price filter
@@ -56,6 +74,66 @@ public class FlightSearchService {
         }
 
         return allResults;
+    }
+
+    /**
+     * ✅ NEW: Find hub-based connections (preferred)
+     */
+    private List<ConnectingFlightDTO> findHubBasedConnections(Airport source, Airport destination,
+                                                              LocalDateTime startOfDay, LocalDateTime endOfDay) {
+        List<ConnectingFlightDTO> hubConnections = new ArrayList<>();
+
+        // Get list of hub airports
+        List<String> hubCodes = Arrays.asList(hubAirportsConfig.split(","));
+
+        for (String hubCode : hubCodes) {
+            // Find flights from source to hub
+            List<Flight> firstLegFlights = flightRepository
+                    .findBySourceAirportCodeAndDepartureTimeBetween(source.getCode(), startOfDay, endOfDay);
+
+            for (Flight firstLeg : firstLegFlights) {
+                // Check if first leg goes to hub
+                if (firstLeg.getDestinationAirport().getCode().equals(hubCode)) {
+                    // Find flights from hub to destination (any time after arrival)
+                    LocalDateTime minConnectionTime = firstLeg.getArrivalTime().plusHours(1);
+                    LocalDateTime maxConnectionTime = firstLeg.getArrivalTime().plusHours(6);
+
+                    List<Flight> secondLegFlights = flightRepository
+                            .findBySourceAirportCodeAndDestinationAirportCodeAndStatus(
+                                    hubCode, destination.getCode(), FlightStatus.SCHEDULED);
+
+                    for (Flight secondLeg : secondLegFlights) {
+                        if (!secondLeg.getDepartureTime().isBefore(minConnectionTime) &&
+                                !secondLeg.getDepartureTime().isAfter(maxConnectionTime)) {
+
+                            List<Flight> segments = new ArrayList<>();
+                            segments.add(firstLeg);
+                            segments.add(secondLeg);
+
+                            ConnectingFlightDTO connection = new ConnectingFlightDTO(segments);
+                            // ✅ NEW: Mark as hub connection
+                            connection.setConnectionType("HUB");
+                            connection.setHubAirport(hubCode);
+                            connection.setSameAirline(firstLeg.getAircraft().getAirline().getId()
+                                    .equals(secondLeg.getAircraft().getAirline().getId()));
+
+                            hubConnections.add(connection);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by: same airline first, then by total duration
+        hubConnections.sort((c1, c2) -> {
+            if (c1.isSameAirline() != c2.isSameAirline()) {
+                return c1.isSameAirline() ? -1 : 1;
+            }
+            return Integer.compare(c1.getTotalDuration(), c2.getTotalDuration());
+        });
+
+        log.info("Found {} hub-based connections", hubConnections.size());
+        return hubConnections;
     }
 
     /**
@@ -73,23 +151,21 @@ public class FlightSearchService {
     }
 
     /**
-     * Find connecting flights (2 segments)
+     * Find normal connecting flights (2 segments) - fallback
      */
-    private List<ConnectingFlightDTO> findConnectingFlights(Airport source, Airport destination,
-                                                            LocalDateTime startOfDay, LocalDateTime endOfDay) {
+    private List<ConnectingFlightDTO> findNormalConnectingFlights(Airport source, Airport destination,
+                                                                  LocalDateTime startOfDay, LocalDateTime endOfDay) {
         List<ConnectingFlightDTO> connectingFlights = new ArrayList<>();
 
-        // Find flights from source to intermediate airports
         List<Flight> firstLegFlights = flightRepository
                 .findBySourceAirportCodeAndDepartureTimeBetween(source.getCode(), startOfDay, endOfDay);
 
         for (Flight firstLeg : firstLegFlights) {
-            // Skip if first leg itself goes to destination
+            // Skip if first leg goes to destination
             if (firstLeg.getDestinationAirport().getCode().equals(destination.getCode())) {
                 continue;
             }
 
-            // Find connecting flights from first leg's destination to our destination
             LocalDateTime minConnectionTime = firstLeg.getArrivalTime().plusHours(1);
             LocalDateTime maxConnectionTime = firstLeg.getArrivalTime().plusHours(6);
 
@@ -103,17 +179,20 @@ public class FlightSearchService {
                 if (!secondLeg.getDepartureTime().isBefore(minConnectionTime) &&
                         !secondLeg.getDepartureTime().isAfter(maxConnectionTime)) {
 
-                    // ✅ CORRECT: Create connecting flight with both segments
                     List<Flight> segments = new ArrayList<>();
                     segments.add(firstLeg);
                     segments.add(secondLeg);
 
-                    ConnectingFlightDTO connectingFlight = new ConnectingFlightDTO(segments);
-                    connectingFlights.add(connectingFlight);
+                    ConnectingFlightDTO connection = new ConnectingFlightDTO(segments);
+                    connection.setConnectionType("NORMAL");
+                    connection.setSameAirline(firstLeg.getAircraft().getAirline().getId()
+                            .equals(secondLeg.getAircraft().getAirline().getId()));
+
+                    connectingFlights.add(connection);
                 }
             }
 
-            // Also look for three-segment connections
+            // Find three-segment connections
             findThreeSegmentConnections(firstLeg, destination, connectingFlights);
         }
 
@@ -121,11 +200,10 @@ public class FlightSearchService {
     }
 
     /**
-     * Find connecting flights with 3 segments (optional)
+     * Find connecting flights with 3 segments
      */
     private void findThreeSegmentConnections(Flight firstLeg, Airport destination,
                                              List<ConnectingFlightDTO> connectingFlights) {
-        // Find second leg to another intermediate airport
         List<Flight> secondLegFlights = flightRepository
                 .findBySourceAirportCodeAndDepartureTimeBetween(
                         firstLeg.getDestinationAirport().getCode(),
@@ -133,12 +211,10 @@ public class FlightSearchService {
                         firstLeg.getArrivalTime().plusHours(4));
 
         for (Flight secondLeg : secondLegFlights) {
-            // Skip if second leg goes to destination
             if (secondLeg.getDestinationAirport().getCode().equals(destination.getCode())) {
                 continue;
             }
 
-            // Find third leg to destination
             LocalDateTime minConnectionTime = secondLeg.getArrivalTime().plusHours(1);
             LocalDateTime maxConnectionTime = secondLeg.getArrivalTime().plusHours(4);
 
@@ -157,8 +233,14 @@ public class FlightSearchService {
                     segments.add(secondLeg);
                     segments.add(thirdLeg);
 
-                    ConnectingFlightDTO connectingFlight = new ConnectingFlightDTO(segments);
-                    connectingFlights.add(connectingFlight);
+                    ConnectingFlightDTO connection = new ConnectingFlightDTO(segments);
+                    connection.setConnectionType("NORMAL");
+                    connection.setSameAirline(firstLeg.getAircraft().getAirline().getId()
+                            .equals(secondLeg.getAircraft().getAirline().getId()) &&
+                            secondLeg.getAircraft().getAirline().getId()
+                                    .equals(thirdLeg.getAircraft().getAirline().getId()));
+
+                    connectingFlights.add(connection);
                 }
             }
         }

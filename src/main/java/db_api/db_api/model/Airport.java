@@ -27,6 +27,9 @@ public class Airport {
 
     private String timezone;
 
+    private Boolean isHub = false;
+    private Integer hubPriority = 0;
+
     @JsonIgnore
     @OneToMany(mappedBy = "sourceAirport")
     private List<Flight> departingFlights;
