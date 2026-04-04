@@ -1,8 +1,10 @@
 package db_api.db_api.controller;
 
 import db_api.db_api.dto.BookingRequestDTO;
+import db_api.db_api.enums.BookingStatus;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.Booking;
+import db_api.db_api.model.Flight;
 import db_api.db_api.service.BookingService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,10 +12,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/db/bookings")
@@ -130,4 +134,6 @@ public class BookingController {
             return ResponseEntity.notFound().build();
         }
     }
+
+
 }

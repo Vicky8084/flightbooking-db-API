@@ -39,12 +39,11 @@ public class FlightService {
     @Autowired
     private BookingFlightRepository bookingFlightRepository;
 
-    // ✅ FIXED: Added FareClassService dependency
     @Autowired
     private FareClassService fareClassService;
 
     /**
-     * Create a new flight with validation
+     * Create a new flight with validation including aircraft time slot conflict check
      */
     @Transactional
     public Flight createFlight(Flight flight) throws BookingException {
@@ -74,6 +73,12 @@ public class FlightService {
         if (flight.getArrivalTime().isBefore(flight.getDepartureTime())) {
             throw new BookingException("Arrival time must be after departure time");
         }
+
+        // ✅ NEW: Check if aircraft is available for the requested time slot
+        checkAircraftAvailability(flight.getAircraft().getId(),
+                flight.getDepartureTime(),
+                flight.getArrivalTime(),
+                null); // null for create (no existing flight ID)
 
         // Calculate duration
         long durationMinutes = java.time.Duration.between(
@@ -107,7 +112,7 @@ public class FlightService {
         flight.setSoldBusinessSeats(0);
         flight.setSoldFirstClassSeats(0);
 
-        // Set current prices
+
         flight.setCurrentPriceEconomy(flight.getBasePriceEconomy());
         flight.setCurrentPriceBusiness(flight.getBasePriceBusiness());
         flight.setCurrentPriceFirstClass(flight.getBasePriceFirstClass());
@@ -128,10 +133,153 @@ public class FlightService {
         Flight savedFlight = flightRepository.save(flight);
 
         // Update dynamic pricing after saving
-        savedFlight.updateAllCurrentPrices();
-        savedFlight = flightRepository.save(savedFlight);
+//        savedFlight.updateAllCurrentPrices();
+//        savedFlight = flightRepository.save(savedFlight);
 
         log.info("✅ Flight created successfully: {}", savedFlight.getFlightNumber());
+
+        return savedFlight;
+    }
+
+    /**
+     * ✅ NEW: Check if aircraft is available for the requested time slot
+     * @param aircraftId Aircraft ID to check
+     * @param newDepartureTime Requested departure time
+     * @param newArrivalTime Requested arrival time
+     * @param excludeFlightId Flight ID to exclude (for update operations, null for create)
+     * @throws BookingException if time slot is already booked
+     */
+    private void checkAircraftAvailability(Long aircraftId,
+                                           LocalDateTime newDepartureTime,
+                                           LocalDateTime newArrivalTime,
+                                           Long excludeFlightId) throws BookingException {
+
+        log.info("Checking aircraft availability for aircraft ID: {} from {} to {}",
+                aircraftId, newDepartureTime, newArrivalTime);
+
+        // Get all flights for this aircraft that are SCHEDULED or DELAYED
+        List<Flight> conflictingFlights = flightRepository.findByAircraftIdAndStatusIn(
+                aircraftId,
+                List.of(FlightStatus.SCHEDULED, FlightStatus.DELAYED)
+        );
+
+        // If updating an existing flight, exclude the current flight from check
+        if (excludeFlightId != null) {
+            conflictingFlights = conflictingFlights.stream()
+                    .filter(f -> !f.getId().equals(excludeFlightId))
+                    .collect(Collectors.toList());
+        }
+
+        for (Flight existingFlight : conflictingFlights) {
+            if (isTimeSlotOverlapping(newDepartureTime, newArrivalTime,
+                    existingFlight.getDepartureTime(),
+                    existingFlight.getArrivalTime())) {
+
+                log.warn("Aircraft conflict detected! Existing flight: {} ({}) from {} to {}, " +
+                                "New flight: from {} to {}",
+                        existingFlight.getFlightNumber(), existingFlight.getId(),
+                        existingFlight.getDepartureTime(), existingFlight.getArrivalTime(),
+                        newDepartureTime, newArrivalTime);
+
+                throw new BookingException(
+                        String.format("Aircraft is already scheduled for a flight!\n" +
+                                        "Existing Flight: %s (%s)\n" +
+                                        "Departure: %s\n" +
+                                        "Arrival: %s\n\n" +
+                                        "Please choose a different aircraft or time slot.",
+                                existingFlight.getFlightNumber(),
+                                existingFlight.getId(),
+                                existingFlight.getDepartureTime(),
+                                existingFlight.getArrivalTime())
+                );
+            }
+        }
+
+        log.info("Aircraft is available for the requested time slot");
+    }
+
+    /**
+     * ✅ NEW: Check if two time slots overlap
+     * @param start1 Start time of first slot
+     * @param end1 End time of first slot
+     * @param start2 Start time of second slot
+     * @param end2 End time of second slot
+     * @return true if time slots overlap
+     */
+    private static final int MIN_TURNAROUND_MINUTES = 45; // Add at top of class
+
+    private boolean isTimeSlotOverlapping(LocalDateTime newStart, LocalDateTime newEnd,
+                                          LocalDateTime existingStart, LocalDateTime existingEnd) {
+        // Add turnaround time to existing flight's arrival time
+        LocalDateTime aircraftAvailableFrom = existingEnd.plusMinutes(MIN_TURNAROUND_MINUTES);
+
+        // Check if new flight departure is before aircraft is available
+        if (newStart.isBefore(aircraftAvailableFrom)) {
+            return true; // Conflict - not enough gap
+        }
+
+        return false;
+    }
+
+    /**
+     * Update an existing flight with aircraft availability check
+     */
+    @Transactional
+    public Flight updateFlight(Long flightId, Flight flightDetails) throws BookingException {
+        log.info("Updating flight ID: {}", flightId);
+
+        Flight existingFlight = getFlightDetails(flightId);
+
+        // Check if aircraft availability for the new time slot (excluding current flight)
+        if (flightDetails.getAircraft() != null && flightDetails.getAircraft().getId() != null) {
+            Long newAircraftId = flightDetails.getAircraft().getId();
+            LocalDateTime newDepartureTime = flightDetails.getDepartureTime() != null ?
+                    flightDetails.getDepartureTime() : existingFlight.getDepartureTime();
+            LocalDateTime newArrivalTime = flightDetails.getArrivalTime() != null ?
+                    flightDetails.getArrivalTime() : existingFlight.getArrivalTime();
+
+            checkAircraftAvailability(newAircraftId, newDepartureTime, newArrivalTime, flightId);
+        }
+
+        // Update fields
+        if (flightDetails.getFlightNumber() != null) {
+            existingFlight.setFlightNumber(flightDetails.getFlightNumber());
+        }
+        if (flightDetails.getAircraft() != null && flightDetails.getAircraft().getId() != null) {
+            Aircraft aircraft = aircraftRepository.findById(flightDetails.getAircraft().getId())
+                    .orElseThrow(() -> new BookingException("Aircraft not found"));
+            existingFlight.setAircraft(aircraft);
+        }
+        if (flightDetails.getDepartureTime() != null) {
+            existingFlight.setDepartureTime(flightDetails.getDepartureTime());
+        }
+        if (flightDetails.getArrivalTime() != null) {
+            existingFlight.setArrivalTime(flightDetails.getArrivalTime());
+        }
+        if (flightDetails.getBasePriceEconomy() != null) {
+            existingFlight.setBasePriceEconomy(flightDetails.getBasePriceEconomy());
+        }
+        if (flightDetails.getBasePriceBusiness() != null) {
+            existingFlight.setBasePriceBusiness(flightDetails.getBasePriceBusiness());
+        }
+        if (flightDetails.getBasePriceFirstClass() != null) {
+            existingFlight.setBasePriceFirstClass(flightDetails.getBasePriceFirstClass());
+        }
+
+        // Recalculate duration if times changed
+        if (flightDetails.getDepartureTime() != null || flightDetails.getArrivalTime() != null) {
+            long durationMinutes = java.time.Duration.between(
+                    existingFlight.getDepartureTime(),
+                    existingFlight.getArrivalTime()
+            ).toMinutes();
+            existingFlight.setDuration((int) durationMinutes);
+        }
+
+        // Update dynamic pricing
+        existingFlight.updateAllCurrentPrices();
+
+        Flight savedFlight = flightRepository.save(existingFlight);
+        log.info("✅ Flight updated successfully: {}", savedFlight.getFlightNumber());
 
         return savedFlight;
     }
@@ -183,7 +331,6 @@ public class FlightService {
             seatInfo.setIsAvailable(!bookedSeatIds.contains(seat.getId()));
 
             if (seatInfo.getIsAvailable()) {
-                // Use dynamic pricing
                 double flightBasePrice = flight.getCurrentPrice(seat.getSeatClass().name());
                 seatInfo.setPrice(seat.calculateFinalPrice(flightBasePrice));
             }
@@ -243,7 +390,7 @@ public class FlightService {
     }
 
     /**
-     * Reschedule a flight
+     * Reschedule a flight with aircraft availability check
      */
     @Transactional
     public Flight rescheduleFlight(Long flightId, LocalDateTime newDepartureTime, LocalDateTime newArrivalTime)
@@ -261,6 +408,9 @@ public class FlightService {
         if (newArrivalTime.isBefore(newDepartureTime)) {
             throw new BookingException("Arrival time must be after departure time");
         }
+
+        // ✅ NEW: Check aircraft availability for the new time slot (excluding current flight)
+        checkAircraftAvailability(flight.getAircraft().getId(), newDepartureTime, newArrivalTime, flightId);
 
         if (flight.getOriginalDepartureTime() == null) {
             flight.setOriginalDepartureTime(flight.getDepartureTime());
@@ -281,7 +431,7 @@ public class FlightService {
     }
 
     /**
-     * Cancel a flight and notify affected bookings
+     * Cancel a flight
      */
     @Transactional
     public Flight cancelFlight(Long flightId) throws BookingException {

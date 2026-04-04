@@ -20,7 +20,7 @@ public class BookingRequestDTO {
     private List<PassengerDTO> passengers;
 
     private PaymentDTO payment;
-
+    private String fareClassCode;
 
     // Getters and Setters
 }

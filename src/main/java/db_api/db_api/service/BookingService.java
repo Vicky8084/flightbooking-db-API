@@ -49,58 +49,59 @@ public class BookingService {
     @Autowired
     private PaymentRepository paymentRepository;
 
+    @Autowired
+    private FareClassRepository fareClassRepository;
+
     @Transactional
     public Booking createBooking(BookingRequestDTO request) throws BookingException {
         log.info("Creating booking for user ID: {}", request.getUserId());
 
-        // Validate user
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new BookingException("User not found"));
 
-        // Create booking
         Booking booking = new Booking();
         booking.setUser(user);
         booking.setPnrNumber(generatePNR());
         booking.setStatus(BookingStatus.PENDING);
         booking.setBookingTime(LocalDateTime.now());
 
-        // Save booking first
+        // Set fare class if provided
+        if (request.getFareClassCode() != null) {
+            FareClass fareClass = fareClassRepository.findByCode(request.getFareClassCode())
+                    .orElseThrow(() -> new BookingException("Fare class not found: " + request.getFareClassCode()));
+            booking.setFareClass(fareClass);
+            booking.setFareClassCode(request.getFareClassCode());
+        }
+
         Booking savedBooking = bookingRepository.save(booking);
 
         List<Passenger> passengers = new ArrayList<>();
         double totalAmount = 0.0;
 
-        // Process each flight in the booking
         for (FlightBookingDTO flightDTO : request.getFlights()) {
             Flight flight = flightRepository.findById(flightDTO.getFlightId())
                     .orElseThrow(() -> new BookingException("Flight not found: " + flightDTO.getFlightId()));
 
-            // ✅ Validate booking is still allowed (with dynamic pricing check)
             if (!flight.canBook()) {
                 throw new BookingException("Booking for flight " + flight.getFlightNumber() +
                         " is closed. Cutoff time was: " +
                         flight.getDepartureTime().minusHours(flight.getBookingCutoffHours()));
             }
 
-            // Check flight availability
             if (flight.getStatus() != FlightStatus.SCHEDULED) {
                 throw new BookingException("Flight is not available for booking: " + flight.getFlightNumber());
             }
 
-            // Create AND save booking flight
             BookingFlight bookingFlight = new BookingFlight();
             bookingFlight.setBooking(savedBooking);
             bookingFlight.setFlight(flight);
             bookingFlight.setFlightSequence(flightDTO.getSequence() != null ? flightDTO.getSequence() : 1);
 
-            // Save bookingFlight before using it in PassengerSeat
             BookingFlight savedBookingFlight = bookingFlightRepository.save(bookingFlight);
 
-            // For each passenger in this flight
             for (PassengerSeatDTO psDTO : flightDTO.getPassengerSeats()) {
                 int passengerIndex = psDTO.getPassengerIndex();
 
-                // Get or create passenger
                 Passenger passenger;
                 if (passengerIndex < passengers.size()) {
                     passenger = passengers.get(passengerIndex);
@@ -113,30 +114,38 @@ public class BookingService {
                     passenger.setPassportNumber(pDTO.getPassportNumber());
                     passenger.setNationality(pDTO.getNationality());
                     passenger.setBooking(savedBooking);
+
+                    // ✅ ✅ ✅ CRITICAL FIX: Email and Phone Number Save Karna
+                    if (pDTO.getEmail() != null && !pDTO.getEmail().isEmpty()) {
+                        passenger.setEmail(pDTO.getEmail());
+                        log.info("Setting email for passenger: {}", pDTO.getEmail());
+                    }
+                    if (pDTO.getPhoneNumber() != null && !pDTO.getPhoneNumber().isEmpty()) {
+                        passenger.setPhoneNumber(pDTO.getPhoneNumber());
+                        log.info("Setting phone for passenger: {}", pDTO.getPhoneNumber());
+                    }
+
                     passenger = passengerRepository.save(passenger);
                     passengers.add(passenger);
+                    log.info("✅ Passenger saved with ID: {}, Email: {}, Phone: {}",
+                            passenger.getId(), passenger.getEmail(), passenger.getPhoneNumber());
                 }
 
-                // Check seat availability with pessimistic lock
                 Seat seat = seatRepository.findById(psDTO.getSeatId())
                         .orElseThrow(() -> new BookingException("Seat not found"));
 
-                // Verify seat belongs to this aircraft
                 if (!seat.getAircraft().getId().equals(flight.getAircraft().getId())) {
                     throw new BookingException("Seat does not belong to this aircraft");
                 }
 
-                // ✅ Check if seat is already booked (with lock)
                 if (passengerSeatRepository.isSeatBookedForFlight(seat.getId(), flight.getId())) {
                     throw new BookingException("Seat " + seat.getSeatNumber() + " is already booked");
                 }
 
-                // ✅ Calculate seat price using dynamic pricing
                 double flightBasePrice = flight.getCurrentPrice(seat.getSeatClass().name());
                 double seatPrice = seat.calculateFinalPrice(flightBasePrice);
                 totalAmount += seatPrice;
 
-                // Create passenger seat assignment
                 PassengerSeat passengerSeat = new PassengerSeat();
                 passengerSeat.setBookingFlight(savedBookingFlight);
                 passengerSeat.setPassenger(passenger);
@@ -149,11 +158,9 @@ public class BookingService {
                         seat.getSeatNumber(), passenger.getFullName(), flight.getFlightNumber());
             }
 
-            // Update available seats count on flight
             updateAvailableSeats(flight);
         }
 
-        // Process payment
         Payment payment = new Payment();
         payment.setBooking(savedBooking);
         payment.setTransactionId(request.getPayment().getTransactionId());
@@ -162,13 +169,18 @@ public class BookingService {
         payment.setStatus(PaymentStatus.SUCCESS);
         paymentRepository.save(payment);
 
-        // Update booking status
         savedBooking.setStatus(BookingStatus.CONFIRMED);
         savedBooking.setTotalAmount(totalAmount);
 
         Booking finalBooking = bookingRepository.save(savedBooking);
         log.info("✅ Booking created successfully! PNR: {}, Total: ₹{}",
                 finalBooking.getPnrNumber(), totalAmount);
+
+        // ✅ Log all passenger emails for verification
+        for (Passenger p : passengers) {
+            log.info("Passenger: {} - Email: {}, Phone: {}",
+                    p.getFullName(), p.getEmail(), p.getPhoneNumber());
+        }
 
         return finalBooking;
     }

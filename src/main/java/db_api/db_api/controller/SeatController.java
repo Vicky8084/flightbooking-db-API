@@ -1,5 +1,6 @@
 package db_api.db_api.controller;
 
+import db_api.db_api.dto.SeatWithRowInfo;
 import db_api.db_api.enums.SeatClass;
 import db_api.db_api.enums.SeatType;
 import db_api.db_api.exception.BookingException;
@@ -91,15 +92,8 @@ public class SeatController {
 
     @GetMapping("/aircraft/{aircraftId}")
     public ResponseEntity<?> getSeatsByAircraft(@PathVariable Long aircraftId) {
-        try {
-            List<Seat> seats = seatService.getSeatsByAircraft(aircraftId);
-            return ResponseEntity.ok(seats);
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "success", false,
-                    "message", e.getMessage()
-            ));
-        }
+        List<Seat> seats = seatService.getSeatsByAircraft(aircraftId);
+        return ResponseEntity.ok(seats);
     }
 
     @GetMapping("/aircraft/{aircraftId}/class/{seatClass}")
@@ -163,4 +157,46 @@ public class SeatController {
             return ResponseEntity.badRequest().body(error);
         }
     }
+
+    /**
+     * NEW: Get seats grouped by row with full information
+     * URL: GET /api/db/seats/aircraft/{aircraftId}/grouped
+     */
+    @GetMapping("/aircraft/{aircraftId}/grouped")
+    public ResponseEntity<?> getSeatsGroupedByRow(@PathVariable Long aircraftId) {
+        try {
+            Map<Integer, List<SeatWithRowInfo>> groupedSeats = seatService.getSeatsGroupedByRow(aircraftId);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("aircraftId", aircraftId);
+            response.put("seatsByRow", groupedSeats);
+
+            return ResponseEntity.ok(response);
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
+    /**
+     * NEW: Get seat map with categories (for frontend display)
+     * URL: GET /api/db/seats/aircraft/{aircraftId}/map
+     */
+    @GetMapping("/aircraft/{aircraftId}/map")
+    public ResponseEntity<?> getSeatMapWithCategories(@PathVariable Long aircraftId) {
+        try {
+            Map<String, Object> seatMap = seatService.getSeatMapWithCategories(aircraftId);
+            seatMap.put("success", true);
+            return ResponseEntity.ok(seatMap);
+        } catch (BookingException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
+
 }

@@ -25,6 +25,8 @@ public class Passenger {
     private String gender;
     private String passportNumber;
     private String nationality;
+    private String email;
+    private String phoneNumber;
 
     // ========== NEW FIELDS ==========
     private String passengerType;  // ADULT, CHILD, INFANT

@@ -6,13 +6,14 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
 import java.time.LocalDateTime;
 import java.util.List;
 
 @Repository
 public interface FlightRepository extends JpaRepository<Flight, Long> {
 
-    // ✅ Indexed queries
+    // Existing methods...
     List<Flight> findBySourceAirportCodeAndDestinationAirportCodeAndStatus(
             String sourceCode, String destinationCode, FlightStatus status);
 
@@ -34,8 +35,18 @@ public interface FlightRepository extends JpaRepository<Flight, Long> {
 
     boolean existsByFlightNumber(String flightNumber);
 
-    // ✅ New method for finding flights by departure time range with index
     @Query("SELECT f FROM Flight f WHERE f.departureTime BETWEEN :start AND :end")
     List<Flight> findByDepartureTimeBetween(@Param("start") LocalDateTime start,
                                             @Param("end") LocalDateTime end);
+
+    // ✅ NEW: Find flights by aircraft ID and list of statuses
+    List<Flight> findByAircraftIdAndStatusIn(Long aircraftId, List<FlightStatus> statuses);
+
+    // ✅ NEW: Alternative using @Query
+    @Query("SELECT f FROM Flight f WHERE f.aircraft.id = :aircraftId AND f.status IN :statuses")
+    List<Flight> findConflictingFlights(@Param("aircraftId") Long aircraftId,
+                                        @Param("statuses") List<FlightStatus> statuses);
+
+    // ✅ NEW: Find flights by aircraft ID
+    List<Flight> findByAircraftId(Long aircraftId);
 }

@@ -283,4 +283,6 @@ public class FlightController {
         flightService.updateAllDynamicPricing();
         return ResponseEntity.ok(Map.of("success", true, "message", "All flights pricing updated"));
     }
+
+
 }

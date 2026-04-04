@@ -239,9 +239,9 @@ public class Flight {
      * Update all current prices based on dynamic pricing
      */
     public void updateAllCurrentPrices() {
-        this.currentPriceEconomy = calculateDynamicPrice("ECONOMY");
-        this.currentPriceBusiness = calculateDynamicPrice("BUSINESS");
-        this.currentPriceFirstClass = calculateDynamicPrice("FIRST");
+        this.currentPriceEconomy = this.basePriceEconomy;
+        this.currentPriceBusiness = this.basePriceBusiness;
+        this.currentPriceFirstClass = this.basePriceFirstClass;
     }
 
     /**
@@ -314,4 +314,6 @@ public class Flight {
         // Initialize dynamic pricing
         updateAllCurrentPrices();
     }
+
+
 }

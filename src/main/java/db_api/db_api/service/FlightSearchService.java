@@ -49,21 +49,29 @@ public class FlightSearchService {
         LocalDateTime startOfDay = searchDTO.getTravelDate().atStartOfDay();
         LocalDateTime endOfDay = startOfDay.plusDays(1).minusNanos(1);
 
+        // ✅ ADD THIS - If travel date is today, only show flights after current time
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime effectiveStart = startOfDay;
+
+        if (searchDTO.getTravelDate().isEqual(now.toLocalDate())) {
+            // Today's date - only show flights after current time
+            effectiveStart = now;
+            log.info("Today's search - filtering flights after current time: {}", now);
+        }
+
         List<Object> allResults = new ArrayList<>();
 
-        // 1. Search direct flights
-        List<Flight> directFlights = findDirectFlights(source, destination, startOfDay, endOfDay);
+        // 1. Search direct flights with time validation
+        List<Flight> directFlights = findDirectFlights(source, destination, effectiveStart, endOfDay);
         allResults.addAll(directFlights);
 
-        // 2. Search connecting flights with hub preference
+        // 2. Search connecting flights with time validation
         if (searchDTO.getIncludeConnectingFlights()) {
-            // ✅ NEW: First try hub-based connections
-            List<ConnectingFlightDTO> hubConnections = findHubBasedConnections(source, destination, startOfDay, endOfDay);
+            List<ConnectingFlightDTO> hubConnections = findHubBasedConnections(source, destination, effectiveStart, endOfDay);
             allResults.addAll(hubConnections);
 
-            // ✅ NEW: If no hub connections, try normal connections
             if (hubConnections.isEmpty()) {
-                List<ConnectingFlightDTO> normalConnections = findNormalConnectingFlights(source, destination, startOfDay, endOfDay);
+                List<ConnectingFlightDTO> normalConnections = findNormalConnectingFlights(source, destination, effectiveStart, endOfDay);
                 allResults.addAll(normalConnections);
             }
         }
@@ -80,21 +88,17 @@ public class FlightSearchService {
      * ✅ NEW: Find hub-based connections (preferred)
      */
     private List<ConnectingFlightDTO> findHubBasedConnections(Airport source, Airport destination,
-                                                              LocalDateTime startOfDay, LocalDateTime endOfDay) {
+                                                              LocalDateTime startTime, LocalDateTime endTime) {
         List<ConnectingFlightDTO> hubConnections = new ArrayList<>();
-
-        // Get list of hub airports
         List<String> hubCodes = Arrays.asList(hubAirportsConfig.split(","));
 
         for (String hubCode : hubCodes) {
-            // Find flights from source to hub
+            // Find flights from source to hub with time validation
             List<Flight> firstLegFlights = flightRepository
-                    .findBySourceAirportCodeAndDepartureTimeBetween(source.getCode(), startOfDay, endOfDay);
+                    .findBySourceAirportCodeAndDepartureTimeBetween(source.getCode(), startTime, endTime);
 
             for (Flight firstLeg : firstLegFlights) {
-                // Check if first leg goes to hub
                 if (firstLeg.getDestinationAirport().getCode().equals(hubCode)) {
-                    // Find flights from hub to destination (any time after arrival)
                     LocalDateTime minConnectionTime = firstLeg.getArrivalTime().plusHours(1);
                     LocalDateTime maxConnectionTime = firstLeg.getArrivalTime().plusHours(6);
 
@@ -103,6 +107,7 @@ public class FlightSearchService {
                                     hubCode, destination.getCode(), FlightStatus.SCHEDULED);
 
                     for (Flight secondLeg : secondLegFlights) {
+                        // ✅ Check if second leg departure is after min connection time
                         if (!secondLeg.getDepartureTime().isBefore(minConnectionTime) &&
                                 !secondLeg.getDepartureTime().isAfter(maxConnectionTime)) {
 
@@ -111,7 +116,6 @@ public class FlightSearchService {
                             segments.add(secondLeg);
 
                             ConnectingFlightDTO connection = new ConnectingFlightDTO(segments);
-                            // ✅ NEW: Mark as hub connection
                             connection.setConnectionType("HUB");
                             connection.setHubAirport(hubCode);
                             connection.setSameAirline(firstLeg.getAircraft().getAirline().getId()
@@ -123,16 +127,6 @@ public class FlightSearchService {
                 }
             }
         }
-
-        // Sort by: same airline first, then by total duration
-        hubConnections.sort((c1, c2) -> {
-            if (c1.isSameAirline() != c2.isSameAirline()) {
-                return c1.isSameAirline() ? -1 : 1;
-            }
-            return Integer.compare(c1.getTotalDuration(), c2.getTotalDuration());
-        });
-
-        log.info("Found {} hub-based connections", hubConnections.size());
         return hubConnections;
     }
 
@@ -140,13 +134,13 @@ public class FlightSearchService {
      * Find direct flights
      */
     private List<Flight> findDirectFlights(Airport source, Airport destination,
-                                           LocalDateTime startOfDay, LocalDateTime endOfDay) {
+                                           LocalDateTime startTime, LocalDateTime endTime) {
         List<Flight> directFlights = flightRepository.findBySourceAirportCodeAndDestinationAirportCodeAndStatus(
                 source.getCode(), destination.getCode(), FlightStatus.SCHEDULED);
 
         return directFlights.stream()
-                .filter(f -> !f.getDepartureTime().isBefore(startOfDay) &&
-                        !f.getDepartureTime().isAfter(endOfDay))
+                .filter(f -> !f.getDepartureTime().isBefore(startTime) &&
+                        !f.getDepartureTime().isAfter(endTime))
                 .collect(Collectors.toList());
     }
 

@@ -1,5 +1,6 @@
 package db_api.db_api.dto;
 
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -20,6 +21,10 @@ public class PassengerDTO {
     private String passportNumber;
 
     private String nationality;
+    @Email(message = "Invalid email format")
+    private String email;
+
+    private String phoneNumber;
 
     // Getters and Setters
 }
