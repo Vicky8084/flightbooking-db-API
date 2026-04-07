@@ -42,10 +42,6 @@ public class SeatService {
         return seatRepository.saveAll(seats);
     }
 
-    public Seat getSeatById(Long id) throws BookingException {
-        return seatRepository.findById(id)
-                .orElseThrow(() -> new BookingException("Seat not found with ID: " + id));
-    }
 
     public List<Seat> getSeatsByAircraft(Long aircraftId) {
         return seatRepository.findByAircraftId(aircraftId);
@@ -185,5 +181,11 @@ public class SeatService {
         result.put("categories", categories);
 
         return result;
+    }
+
+    // Already exists in SeatService.java
+    public Seat getSeatById(Long id) throws BookingException {
+        return seatRepository.findById(id)
+                .orElseThrow(() -> new BookingException("Seat not found with ID: " + id));
     }
 }

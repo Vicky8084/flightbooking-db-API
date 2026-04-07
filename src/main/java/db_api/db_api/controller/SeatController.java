@@ -111,15 +111,6 @@ public class SeatController {
         }
     }
 
-    @GetMapping("/{id}")
-    public ResponseEntity<?> getSeatById(@PathVariable Long id) {
-        try {
-            Seat seat = seatService.getSeatById(id);
-            return ResponseEntity.ok(seat);
-        } catch (BookingException e) {
-            return ResponseEntity.notFound().build();
-        }
-    }
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateSeat(@PathVariable Long id, @Valid @RequestBody Seat seatDetails) {
@@ -196,6 +187,17 @@ public class SeatController {
                     "success", false,
                     "message", e.getMessage()
             ));
+        }
+    }
+    // Add to db_api/db_api/controller/SeatController.java
+
+    @GetMapping("/{id}")
+    public ResponseEntity<?> getSeatById(@PathVariable Long id) {
+        try {
+            Seat seat = seatService.getSeatById(id);
+            return ResponseEntity.ok(seat);
+        } catch (BookingException e) {
+            return ResponseEntity.notFound().build();
         }
     }
 

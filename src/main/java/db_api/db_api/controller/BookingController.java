@@ -53,6 +53,7 @@ public class BookingController {
         }
     }
 
+    // ✅ Existing endpoint - returns Map with success, count, bookings
     @GetMapping("/user/{userId}")
     public ResponseEntity<?> getUserBookings(@PathVariable Long userId) {
         try {
@@ -69,16 +70,109 @@ public class BookingController {
             error.put("success", false);
             error.put("message", e.getMessage());
 
-            // Return 404 if user not found, 200 with empty list if no bookings
             if (e.getMessage().contains("User not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
             }
-            return ResponseEntity.ok(new ArrayList<>()); // Return empty list if no bookings
+            return ResponseEntity.ok(new ArrayList<>());
         } catch (Exception e) {
             Map<String, Object> error = new HashMap<>();
             error.put("success", false);
             error.put("message", "Internal server error: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+
+    // ✅ NEW ENDPOINT - returns direct list of bookings (no wrapper)
+    @GetMapping("/user/{userId}/list")
+    public ResponseEntity<?> getUserBookingsList(@PathVariable Long userId) {
+        try {
+            List<Booking> bookings = bookingService.findByUserId(userId);
+            return ResponseEntity.ok(bookings);
+        } catch (BookingException e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        } catch (Exception e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        }
+    }
+
+    // ✅ NEW ENDPOINT - Get upcoming bookings (future flights)
+    @GetMapping("/user/{userId}/upcoming")
+    public ResponseEntity<?> getUserUpcomingBookings(@PathVariable Long userId) {
+        try {
+            List<Booking> allBookings = bookingService.findByUserId(userId);
+            LocalDateTime now = LocalDateTime.now();
+
+            List<Booking> upcomingBookings = allBookings.stream()
+                    .filter(booking -> booking.getStatus() == BookingStatus.CONFIRMED)
+                    .filter(booking -> {
+                        if (booking.getBookingFlights() == null || booking.getBookingFlights().isEmpty()) {
+                            return false;
+                        }
+                        LocalDateTime departureTime = booking.getBookingFlights().get(0).getFlight().getDepartureTime();
+                        return departureTime.isAfter(now);
+                    })
+                    .collect(Collectors.toList());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("count", upcomingBookings.size());
+            response.put("bookings", upcomingBookings);
+
+            return ResponseEntity.ok(response);
+        } catch (BookingException e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        } catch (Exception e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        }
+    }
+
+    // ✅ NEW ENDPOINT - Get past/completed bookings
+    @GetMapping("/user/{userId}/past")
+    public ResponseEntity<?> getUserPastBookings(@PathVariable Long userId) {
+        try {
+            List<Booking> allBookings = bookingService.findByUserId(userId);
+            LocalDateTime now = LocalDateTime.now();
+
+            List<Booking> pastBookings = allBookings.stream()
+                    .filter(booking -> booking.getStatus() == BookingStatus.CONFIRMED || booking.getStatus() == BookingStatus.COMPLETED)
+                    .filter(booking -> {
+                        if (booking.getBookingFlights() == null || booking.getBookingFlights().isEmpty()) {
+                            return false;
+                        }
+                        LocalDateTime departureTime = booking.getBookingFlights().get(0).getFlight().getDepartureTime();
+                        return departureTime.isBefore(now);
+                    })
+                    .collect(Collectors.toList());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("count", pastBookings.size());
+            response.put("bookings", pastBookings);
+
+            return ResponseEntity.ok(response);
+        } catch (BookingException e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        } catch (Exception e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        }
+    }
+
+    // ✅ NEW ENDPOINT - Get cancelled bookings
+    @GetMapping("/user/{userId}/cancelled")
+    public ResponseEntity<?> getUserCancelledBookings(@PathVariable Long userId) {
+        try {
+            List<Booking> cancelledBookings = bookingService.findByUserIdAndStatus(userId, BookingStatus.CANCELLED);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("count", cancelledBookings.size());
+            response.put("bookings", cancelledBookings);
+
+            return ResponseEntity.ok(response);
+        } catch (BookingException e) {
+            return ResponseEntity.ok(new ArrayList<>());
+        } catch (Exception e) {
+            return ResponseEntity.ok(new ArrayList<>());
         }
     }
 
@@ -107,7 +201,6 @@ public class BookingController {
         try {
             Booking booking = bookingService.findByPNR(pnr);
 
-            // You might want to return a DTO instead of the entity
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
             response.put("booking", booking);
@@ -134,6 +227,4 @@ public class BookingController {
             return ResponseEntity.notFound().build();
         }
     }
-
-
 }

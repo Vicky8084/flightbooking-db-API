@@ -7,7 +7,6 @@ import db_api.db_api.dto.PassengerSeatDTO;
 import db_api.db_api.enums.BookingStatus;
 import db_api.db_api.enums.FlightStatus;
 import db_api.db_api.enums.PaymentStatus;
-import db_api.db_api.enums.SeatType;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.*;
 import db_api.db_api.repository.*;
@@ -65,7 +64,6 @@ public class BookingService {
         booking.setStatus(BookingStatus.PENDING);
         booking.setBookingTime(LocalDateTime.now());
 
-        // Set fare class if provided
         if (request.getFareClassCode() != null) {
             FareClass fareClass = fareClassRepository.findByCode(request.getFareClassCode())
                     .orElseThrow(() -> new BookingException("Fare class not found: " + request.getFareClassCode()));
@@ -78,7 +76,38 @@ public class BookingService {
         List<Passenger> passengers = new ArrayList<>();
         double totalAmount = 0.0;
 
-        for (FlightBookingDTO flightDTO : request.getFlights()) {
+        // ✅ IMPORTANT: Get flights list
+        List<FlightBookingDTO> flightsToProcess = request.getFlights();
+
+        // ✅ LOG the raw request for debugging
+        log.info("Full request received: userId={}, flights={}, fareClassCode={}",
+                request.getUserId(), flightsToProcess, request.getFareClassCode());
+
+        // If flights list is null or empty, try single flight mode
+        if (flightsToProcess == null || flightsToProcess.isEmpty()) {
+            if (request.getFlightId() != null) {
+                log.info("Using single flight mode for flight ID: {}", request.getFlightId());
+                FlightBookingDTO singleFlight = new FlightBookingDTO();
+                singleFlight.setFlightId(request.getFlightId());
+                singleFlight.setSequence(1);
+                // For single flight, we need passengerSeats from somewhere
+                // This is a fallback - ideally should not happen
+                flightsToProcess = List.of(singleFlight);
+            } else {
+                throw new BookingException("No flights specified for booking");
+            }
+        }
+
+        log.info("Processing {} flights", flightsToProcess.size());
+
+        for (FlightBookingDTO flightDTO : flightsToProcess) {
+            log.info("Processing flight DTO: {}", flightDTO);
+
+            if (flightDTO.getFlightId() == null) {
+                log.error("Flight ID is null in booking request! DTO: {}", flightDTO);
+                throw new BookingException("Flight ID cannot be null");
+            }
+
             Flight flight = flightRepository.findById(flightDTO.getFlightId())
                     .orElseThrow(() -> new BookingException("Flight not found: " + flightDTO.getFlightId()));
 
@@ -99,7 +128,12 @@ public class BookingService {
 
             BookingFlight savedBookingFlight = bookingFlightRepository.save(bookingFlight);
 
-            for (PassengerSeatDTO psDTO : flightDTO.getPassengerSeats()) {
+            List<PassengerSeatDTO> passengerSeats = flightDTO.getPassengerSeats();
+            if (passengerSeats == null || passengerSeats.isEmpty()) {
+                throw new BookingException("No seats selected for flight: " + flight.getFlightNumber());
+            }
+
+            for (PassengerSeatDTO psDTO : passengerSeats) {
                 int passengerIndex = psDTO.getPassengerIndex();
 
                 Passenger passenger;
@@ -115,7 +149,6 @@ public class BookingService {
                     passenger.setNationality(pDTO.getNationality());
                     passenger.setBooking(savedBooking);
 
-                    // ✅ ✅ ✅ CRITICAL FIX: Email and Phone Number Save Karna
                     if (pDTO.getEmail() != null && !pDTO.getEmail().isEmpty()) {
                         passenger.setEmail(pDTO.getEmail());
                         log.info("Setting email for passenger: {}", pDTO.getEmail());
@@ -127,19 +160,18 @@ public class BookingService {
 
                     passenger = passengerRepository.save(passenger);
                     passengers.add(passenger);
-                    log.info("✅ Passenger saved with ID: {}, Email: {}, Phone: {}",
-                            passenger.getId(), passenger.getEmail(), passenger.getPhoneNumber());
+                    log.info("✅ Passenger saved with ID: {}, Email: {}", passenger.getId(), passenger.getEmail());
                 }
 
                 Seat seat = seatRepository.findById(psDTO.getSeatId())
-                        .orElseThrow(() -> new BookingException("Seat not found"));
+                        .orElseThrow(() -> new BookingException("Seat not found: " + psDTO.getSeatId()));
 
                 if (!seat.getAircraft().getId().equals(flight.getAircraft().getId())) {
                     throw new BookingException("Seat does not belong to this aircraft");
                 }
 
                 if (passengerSeatRepository.isSeatBookedForFlight(seat.getId(), flight.getId())) {
-                    throw new BookingException("Seat " + seat.getSeatNumber() + " is already booked");
+                    throw new BookingException("Seat " + seat.getSeatNumber() + " is already booked for flight " + flight.getFlightNumber());
                 }
 
                 double flightBasePrice = flight.getCurrentPrice(seat.getSeatClass().name());
@@ -154,7 +186,7 @@ public class BookingService {
 
                 passengerSeatRepository.save(passengerSeat);
 
-                log.debug("Seat {} assigned to passenger {} for flight {}",
+                log.info("Seat {} assigned to passenger {} for flight {}",
                         seat.getSeatNumber(), passenger.getFullName(), flight.getFlightNumber());
             }
 
@@ -176,7 +208,6 @@ public class BookingService {
         log.info("✅ Booking created successfully! PNR: {}, Total: ₹{}",
                 finalBooking.getPnrNumber(), totalAmount);
 
-        // ✅ Log all passenger emails for verification
         for (Passenger p : passengers) {
             log.info("Passenger: {} - Email: {}, Phone: {}",
                     p.getFullName(), p.getEmail(), p.getPhoneNumber());
@@ -207,58 +238,36 @@ public class BookingService {
         flightRepository.save(flight);
     }
 
-    /**
-     * Find booking by PNR number
-     */
     public Booking findByPNR(String pnr) throws BookingException {
         if (pnr == null || pnr.trim().isEmpty()) {
             throw new BookingException("PNR number cannot be empty");
         }
-
         return bookingRepository.findByPnrNumber(pnr.toUpperCase())
                 .orElseThrow(() -> new BookingException("Booking not found with PNR: " + pnr));
     }
 
-    /**
-     * Find bookings by user ID and status
-     */
     public List<Booking> findByUserIdAndStatus(Long userId, BookingStatus status) throws BookingException {
-        if (userId == null) {
-            throw new BookingException("User ID cannot be null");
-        }
-        if (status == null) {
-            throw new BookingException("Status cannot be null");
-        }
-
+        if (userId == null) throw new BookingException("User ID cannot be null");
+        if (status == null) throw new BookingException("Status cannot be null");
         return bookingRepository.findByUserIdAndStatus(userId, status);
     }
 
-    /**
-     * Cancel booking and release seats
-     */
     @Transactional
     public Booking cancelBooking(Long bookingId) throws BookingException {
         log.info("Cancelling booking ID: {}", bookingId);
-
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BookingException("Booking not found with ID: " + bookingId));
 
-        // Check if booking can be cancelled
         if (booking.getStatus() == BookingStatus.CANCELLED) {
             throw new BookingException("Booking is already cancelled");
         }
-
         if (booking.getStatus() == BookingStatus.COMPLETED) {
             throw new BookingException("Completed bookings cannot be cancelled");
         }
 
-        // Release seats
         releaseSeats(booking);
-
-        // Update booking status
         booking.setStatus(BookingStatus.CANCELLED);
 
-        // Update payment status to REFUNDED
         if (booking.getPayment() != null) {
             booking.getPayment().setStatus(PaymentStatus.REFUNDED);
             paymentRepository.save(booking.getPayment());
@@ -266,86 +275,50 @@ public class BookingService {
 
         Booking cancelledBooking = bookingRepository.save(booking);
         log.info("✅ Booking {} cancelled successfully", booking.getPnrNumber());
-
         return cancelledBooking;
     }
 
-    /**
-     * Find booking by ID
-     */
     public Booking findById(Long bookingId) throws BookingException {
-        if (bookingId == null) {
-            throw new BookingException("Booking ID cannot be null");
-        }
-
+        if (bookingId == null) throw new BookingException("Booking ID cannot be null");
         return bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BookingException("Booking not found with ID: " + bookingId));
     }
 
-    /**
-     * Get booking details with all associations
-     */
     @Transactional
     public Booking getBookingDetails(Long bookingId) throws BookingException {
         Booking booking = findById(bookingId);
-
-        // Force load lazy associations
         booking.getPassengers().size();
         booking.getBookingFlights().size();
         if (booking.getPayment() != null) {
             booking.getPayment().getTransactionId();
         }
-
         return booking;
     }
 
-    /**
-     * Release all seats for this booking
-     */
     private void releaseSeats(Booking booking) {
         List<BookingFlight> bookingFlights = booking.getBookingFlights();
-
         for (BookingFlight bookingFlight : bookingFlights) {
             List<PassengerSeat> passengerSeats = bookingFlight.getPassengerSeats();
-
-            // Delete all passenger seat assignments
             for (PassengerSeat passengerSeat : passengerSeats) {
                 passengerSeatRepository.delete(passengerSeat);
                 log.debug("Released seat ID: {}", passengerSeat.getSeat().getId());
             }
-
-            // Update available seats count for the flight
             Flight flight = bookingFlight.getFlight();
             updateAvailableSeats(flight);
         }
     }
 
-    /**
-     * Find all bookings by user ID
-     */
     public List<Booking> findByUserId(Long userId) throws BookingException {
-        if (userId == null) {
-            throw new BookingException("User ID cannot be null");
-        }
-
+        if (userId == null) throw new BookingException("User ID cannot be null");
         if (!userRepository.existsById(userId)) {
             throw new BookingException("User not found with ID: " + userId);
         }
-
         return bookingRepository.findByUserId(userId);
     }
 
-    /**
-     * Get recent bookings for user
-     */
     public List<Booking> getRecentUserBookings(Long userId, int limit) throws BookingException {
-        if (userId == null) {
-            throw new BookingException("User ID cannot be null");
-        }
-
+        if (userId == null) throw new BookingException("User ID cannot be null");
         List<Booking> allBookings = findByUserId(userId);
-        return allBookings.stream()
-                .limit(limit)
-                .collect(java.util.stream.Collectors.toList());
+        return allBookings.stream().limit(limit).collect(java.util.stream.Collectors.toList());
     }
 }
