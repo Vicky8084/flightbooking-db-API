@@ -25,11 +25,25 @@ public class FareClassController {
     }
 
     @GetMapping("/{code}")
-    public ResponseEntity<FareClass> getFareClassByCode(@PathVariable String code) {
+    public ResponseEntity<?> getFareClassByCode(@PathVariable String code) {
         try {
-            return ResponseEntity.ok(fareClassService.getFareClassByCode(code));
+            System.out.println("🔍 Fetching fare class with code: " + code);
+            FareClass fareClass = fareClassService.getFareClassByCode(code);
+            System.out.println("✅ Found fare class: " + fareClass.getCode() + " - " + fareClass.getName());
+            return ResponseEntity.ok(fareClass);
         } catch (BookingException e) {
-            return ResponseEntity.notFound().build();
+            System.out.println("❌ Fare class not found: " + code);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+        } catch (Exception e) {
+            System.out.println("❌ Error fetching fare class: " + e.getMessage());
+            e.printStackTrace();
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "Internal server error: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
 
