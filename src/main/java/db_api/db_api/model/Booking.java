@@ -1,6 +1,6 @@
 package db_api.db_api.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import db_api.db_api.enums.BookingStatus;
 import jakarta.persistence.*;
 import lombok.Data;
@@ -28,42 +28,45 @@ public class Booking {
 
     private Double totalAmount;
 
-    // ========== NEW FIELDS ==========
     @ManyToOne
     @JoinColumn(name = "fare_class_id")
     private FareClass fareClass;
 
-    private String fareClassCode;  // LITE, STANDARD, FLEX, BUSINESS, FIRST
+    private String fareClassCode;
 
     private Double cancellationFee;
     private Double changeFee;
-    private Double refundAmount;  // Amount refunded if cancelled
+    private Double refundAmount;
 
     @Enumerated(EnumType.STRING)
     private BookingStatus status;
 
-    // Track if extra baggage was purchased
     private Double totalBaggagePrice = 0.0;
     private Integer totalExtraBaggageKg = 0;
 
-    @JsonIgnore
-    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL)
+    // ✅ FIXED: Removed @JsonIgnore - Now appears in JSON response
+    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonProperty("bookingFlights")
     private List<BookingFlight> bookingFlights;
 
-    @JsonIgnore
-    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL)
+    // ✅ FIXED: Removed @JsonIgnore - Now appears in JSON response
+    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonProperty("passengers")
     private List<Passenger> passengers;
 
-    @JsonIgnore
-    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL)
+    // ✅ FIXED: Removed @JsonIgnore - Now appears in JSON response
+    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonProperty("extraBaggages")
     private List<ExtraBaggage> extraBaggages;
 
-    @JsonIgnore
-    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL)
+    // ✅ FIXED: Removed @JsonIgnore - Now appears in JSON response
+    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonProperty("mealPreferences")
     private List<MealPreference> mealPreferences;
 
-    @JsonIgnore
-    @OneToOne(mappedBy = "booking", cascade = CascadeType.ALL)
+    // ✅ FIXED: Removed @JsonIgnore - Now appears in JSON response
+    @OneToOne(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonProperty("payment")
     private Payment payment;
 
     @PrePersist
@@ -80,14 +83,13 @@ public class Booking {
         }
 
         long daysBeforeDeparture = 0;
-        if (!bookingFlights.isEmpty()) {
+        if (bookingFlights != null && !bookingFlights.isEmpty()) {
             Flight flight = bookingFlights.get(0).getFlight();
             daysBeforeDeparture = java.time.Duration.between(
                     cancellationTime, flight.getDepartureTime()
             ).toDays();
         }
 
-        // Parse refund percentages from fare class
         if (fareClass.getRefundPercentageByDays() != null) {
             String[] rules = fareClass.getRefundPercentageByDays().split(",");
             for (String rule : rules) {
@@ -100,7 +102,6 @@ public class Booking {
             }
         }
 
-        // Default: subtract cancellation fee
         double refund = totalAmount - (cancellationFee != null ? cancellationFee : 0);
         return Math.max(0, refund);
     }

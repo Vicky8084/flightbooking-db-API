@@ -1,11 +1,14 @@
 package db_api.db_api.controller;
 
 import db_api.db_api.dto.BookingRequestDTO;
+import db_api.db_api.dto.BookingResponseDTO;
 import db_api.db_api.enums.BookingStatus;
 import db_api.db_api.exception.BookingException;
 import db_api.db_api.model.*;
 import db_api.db_api.service.BookingService;
+import jakarta.transaction.Transactional;
 import jakarta.validation.Valid;
+import org.hibernate.Hibernate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -307,21 +310,70 @@ public class BookingController {
     }
 
     @GetMapping("/pnr/{pnr}")
+    @Transactional
     public ResponseEntity<?> getBookingByPNR(@PathVariable String pnr) {
         try {
+            System.out.println("========== PNR SEARCH START ==========");
+            System.out.println("🔍 Searching for PNR: " + pnr);
+
             Booking booking = bookingService.findByPNR(pnr);
+
+            if (booking == null) {
+                System.out.println("❌ Booking not found for PNR: " + pnr);
+                Map<String, Object> error = new HashMap<>();
+                error.put("success", false);
+                error.put("message", "Booking not found with PNR: " + pnr);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
+
+            System.out.println("✅ Booking found - ID: " + booking.getId() + ", PNR: " + booking.getPnrNumber());
+
+            // Force load lazy associations
+            if (booking.getBookingFlights() != null) {
+                booking.getBookingFlights().size();
+                for (BookingFlight bf : booking.getBookingFlights()) {
+                    if (bf.getFlight() != null) {
+                        bf.getFlight().getFlightNumber();
+                        if (bf.getFlight().getAircraft() != null) {
+                            bf.getFlight().getAircraft().getModel();
+                            if (bf.getFlight().getAircraft().getAirline() != null) {
+                                bf.getFlight().getAircraft().getAirline().getId();
+                            }
+                        }
+                    }
+                    if (bf.getPassengerSeats() != null) {
+                        bf.getPassengerSeats().size();
+                    }
+                }
+            }
+            if (booking.getPassengers() != null) {
+                booking.getPassengers().size();
+            }
+
+            // Convert to DTO to avoid circular references
+            BookingResponseDTO responseDTO = new BookingResponseDTO(booking);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("booking", booking);
+            response.put("booking", responseDTO);
             response.put("message", "Booking found successfully");
 
+            System.out.println("========== PNR SEARCH COMPLETE ==========");
             return ResponseEntity.ok(response);
+
         } catch (BookingException e) {
+            System.out.println("❌ BookingException: " + e.getMessage());
             Map<String, Object> error = new HashMap<>();
             error.put("success", false);
             error.put("message", e.getMessage());
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+        } catch (Exception e) {
+            System.out.println("❌ Exception: " + e.getMessage());
+            e.printStackTrace();
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "Error fetching booking: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
 

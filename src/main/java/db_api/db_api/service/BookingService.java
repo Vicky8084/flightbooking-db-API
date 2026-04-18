@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 
 @Service
@@ -242,8 +243,24 @@ public class BookingService {
         if (pnr == null || pnr.trim().isEmpty()) {
             throw new BookingException("PNR number cannot be empty");
         }
-        return bookingRepository.findByPnrNumber(pnr.toUpperCase())
-                .orElseThrow(() -> new BookingException("Booking not found with PNR: " + pnr));
+
+        Optional<Booking> bookingOpt = bookingRepository.findByPnrNumber(pnr.toUpperCase());
+
+        if (bookingOpt.isEmpty()) {
+            throw new BookingException("Booking not found with PNR: " + pnr);
+        }
+
+        Booking booking = bookingOpt.get();
+
+        // ✅ Force load all associations to avoid lazy loading issues
+        if (booking.getBookingFlights() != null) {
+            booking.getBookingFlights().size();
+        }
+        if (booking.getPassengers() != null) {
+            booking.getPassengers().size();
+        }
+
+        return booking;
     }
 
     public List<Booking> findByUserIdAndStatus(Long userId, BookingStatus status) throws BookingException {
